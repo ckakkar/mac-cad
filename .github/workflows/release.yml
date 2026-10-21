@@ -13,8 +13,9 @@ concurrency:
 jobs:
   mac:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+      vars.MACCAD_CLOUD_RELEASES == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
     runs-on: macos-26
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -29,24 +30,27 @@ jobs:
         with:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
+      - run: command -v pkg-config || brew install pkgconf
       - name: Release version and prerequisites
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
-          test -n "$SPARKLE_PUBLIC_KEY" || { echo 'Set repository variable SPARKLE_PUBLIC_KEY; see CONTRIBUTING.md.'; exit 1; }
+          test -s config/SparklePublicKey || { echo 'Missing public signing key.'; exit 1; }
           test -n "$SPARKLE_PRIVATE_KEY" || { echo 'Set repository secret SPARKLE_PRIVATE_KEY; see CONTRIBUTING.md.'; exit 1; }
           version="$(cat VERSION).$(git rev-list --count HEAD)"
           echo "VERSION=$version" >> "$GITHUB_ENV"
           echo "BUILD_NUMBER=$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
           if gh release view "v$version" >/dev/null 2>&1; then
-            echo 'Release already exists; refusing to replace its signed artifacts.'
-            exit 1
+            echo 'Release already exists; leaving its signed artifacts unchanged.'
+            echo 'RELEASE_EXISTS=true' >> "$GITHUB_ENV"
           fi
           # Ignore a completed workflow for a commit superseded by main.
           test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
       - name: Check the exact release commit
+        if: env.RELEASE_EXISTS != 'true'
         run: make check
       - name: Optional Developer ID certificate
+        if: env.RELEASE_EXISTS != 'true'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -66,8 +70,10 @@ jobs:
             echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
           fi
       - name: Package direct download
+        if: env.RELEASE_EXISTS != 'true'
         run: make dmg
       - name: Optional notarization
+        if: env.RELEASE_EXISTS != 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -79,10 +85,12 @@ jobs:
             xcrun stapler staple build/MacCAD.dmg
           fi
       - name: Signed updates and corresponding source
+        if: env.RELEASE_EXISTS != 'true'
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: bash scripts/release-assets.sh
       - name: Publish
+        if: env.RELEASE_EXISTS != 'true'
         run: |
           gh release create "v$VERSION" build/release/* --target "$RELEASE_SHA" --title "MacCAD $VERSION" --notes-file build/release-notes.md --latest
       - name: Remove temporary signing material

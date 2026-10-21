@@ -94,6 +94,39 @@ pub unsafe extern "C" fn cad_render(
 /// # Safety
 /// batch is null or a live, not-yet-freed batch from cad_render.
 #[no_mangle]
+pub unsafe extern "C" fn cad_render_plain(
+    engine: *const Engine,
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+    tolerance: f64,
+) -> *mut Batch {
+    if engine.is_null()
+        || ![min_x, min_y, max_x, max_y, tolerance]
+            .iter()
+            .all(|v| v.is_finite())
+        || min_x > max_x
+        || min_y > max_y
+        || tolerance <= 0.0
+    {
+        return ptr::null_mut();
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        Box::into_raw(Box::new((*engine).batch_mode(
+            Bounds {
+                min: Point::new(min_x, min_y),
+                max: Point::new(max_x, max_y),
+            },
+            tolerance,
+            false,
+        )))
+    }))
+    .unwrap_or(ptr::null_mut())
+}
+/// # Safety
+/// batch is null or a live, not-yet-freed batch from cad_render.
+#[no_mangle]
 pub unsafe extern "C" fn cad_batch_free(batch: *mut Batch) {
     if !batch.is_null() {
         drop(Box::from_raw(batch));

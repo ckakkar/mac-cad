@@ -12,6 +12,7 @@ pub struct Segment {
     pub by: f64,
     pub color: [f32; 4],
     pub entity: u64,
+    pub line_weight: f32,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -23,6 +24,7 @@ pub struct Triangle {
     pub cx: f64,
     pub cy: f64,
     pub color: [f32; 4],
+    pub entity: u64,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct Label {
@@ -48,6 +50,7 @@ impl Batch {
             by: b.y,
             color,
             entity,
+            line_weight: 0.25,
         });
     }
     pub fn bounds(&self) -> Option<Bounds> {
@@ -61,7 +64,10 @@ impl Batch {
             add(&[Point::new(s.ax, s.ay), Point::new(s.bx, s.by)]);
         }
         for l in &self.labels {
-            let w = l.height * l.text.chars().count() as f64 * 0.65;
+            let w = l.height
+                * l.text.lines().map(|s| s.chars().count()).max().unwrap_or(0) as f64
+                * 0.75;
+            let h = l.height * l.text.lines().count().max(1) as f64 * 1.3;
             let t = Transform::translation(l.at).compose(Transform::rotation(
                 Point::default(),
                 l.rotation,
@@ -70,8 +76,8 @@ impl Batch {
             add(&[
                 t.apply(Point::new(0.0, 0.0)),
                 t.apply(Point::new(w, 0.0)),
-                t.apply(Point::new(w, l.height)),
-                t.apply(Point::new(0.0, l.height)),
+                t.apply(Point::new(w, h)),
+                t.apply(Point::new(0.0, h)),
             ]);
         }
         bounds
@@ -79,10 +85,80 @@ impl Batch {
 }
 
 pub fn entity_batch(doc: &Document, e: &Entity, tolerance: f64) -> Batch {
+    let mut b = entity_geometry(doc, e, tolerance);
+    let layer = doc.layer(&e.layer);
+    let weight = e
+        .style
+        .line_weight
+        .unwrap_or_else(|| layer.map_or(0.25, |l| l.line_weight));
+    let kind = e
+        .style
+        .line_type
+        .as_deref()
+        .unwrap_or_else(|| layer.map_or("Continuous", |l| l.line_type.as_str()));
+    for s in &mut b.segments {
+        s.line_weight = weight;
+    }
+    if kind != "Continuous" {
+        let unit = doc_unit_text_height(doc) / 150.0;
+        let pattern: Vec<f64> = match kind {
+            "Center" => vec![400.0, 80.0, 60.0, 80.0],
+            "Dotted" => vec![10.0, 80.0],
+            "Hidden" => vec![120.0, 60.0],
+            _ => vec![240.0, 100.0],
+        }
+        .into_iter()
+        .map(|v| v * unit)
+        .collect();
+        let mut output = Vec::new();
+        let mut index = 0;
+        let mut remain = pattern[0];
+        for s in &b.segments {
+            let a = Point::new(s.ax, s.ay);
+            let delta = Point::new(s.bx - s.ax, s.by - s.ay);
+            let length = delta.length();
+            if length < 1e-12 {
+                continue;
+            }
+            let u = delta * (1.0 / length);
+            let mut pos = 0.0;
+            while pos < length {
+                let end = (pos + remain).min(length);
+                if index % 2 == 0 {
+                    let p = a + u * pos;
+                    let q = a + u * end;
+                    output.push(Segment {
+                        ax: p.x,
+                        ay: p.y,
+                        bx: q.x,
+                        by: q.y,
+                        ..*s
+                    });
+                }
+                remain -= end - pos;
+                pos = end;
+                if remain < 1e-10 {
+                    index = (index + 1) % pattern.len();
+                    remain = pattern[index];
+                }
+                if output.len() > 200_000 {
+                    break;
+                }
+            }
+            if output.len() > 200_000 {
+                break;
+            }
+        }
+        b.segments = output;
+    }
+    b
+}
+pub fn entity_geometry(doc: &Document, e: &Entity, tolerance: f64) -> Batch {
     let mut b = Batch::default();
-    let color = doc
-        .layer(&e.layer)
-        .map_or([0.8, 0.85, 0.9, 1.0], |l| l.color);
+    let color = e.style.color.unwrap_or_else(|| {
+        doc.layer(&e.layer)
+            .map_or([0.8, 0.85, 0.9, 1.0], |l| l.color)
+    });
     append_shape(
         &mut b,
         doc,
@@ -111,6 +187,55 @@ fn append_shape(
     }
     let mut line = |a: Point, b: Point| out.line(t.apply(a), t.apply(b), color, id);
     match shape {
+        Shape::Point { at } => {
+            let d = tolerance * 5.0 / t.scale();
+            line(*at - Point::new(d, 0.0), *at + Point::new(d, 0.0));
+            line(*at - Point::new(0.0, d), *at + Point::new(0.0, d));
+        }
+        Shape::Ellipse {
+            center,
+            major,
+            ratio,
+            start,
+            sweep,
+        } => {
+            let radius = major.length() * t.scale();
+            let step =
+                (2.0 * (1.0 - (tolerance / radius).clamp(1e-9, 1.0)).acos()).clamp(0.001, 0.2);
+            let count = (sweep.abs() / step).ceil().clamp(8.0, 8192.0) as usize;
+            let at = |theta| crate::curves::ellipse_point(*center, *major, *ratio, theta);
+            let mut a = at(*start);
+            for i in 1..=count {
+                let b = at(start + sweep * i as f64 / count as f64);
+                line(a, b);
+                a = b;
+            }
+        }
+        Shape::Spline {
+            degree,
+            control_points,
+            knots,
+            weights,
+            closed,
+        } => {
+            let length: f64 = control_points.windows(2).map(|p| p[0].distance(p[1])).sum();
+            let count = ((length * t.scale() / tolerance.max(1e-12)).sqrt() * 8.0)
+                .ceil()
+                .clamp(32.0, 8192.0) as usize;
+            let lo = knots[*degree];
+            let hi = knots[control_points.len()];
+            let at = |u| crate::curves::spline_point(*degree, control_points, knots, weights, u);
+            let first = at(lo);
+            let mut a = first;
+            for i in 1..=count {
+                let b = at(lo + (hi - lo) * i as f64 / count as f64);
+                line(a, b);
+                a = b;
+            }
+            if *closed {
+                line(a, first);
+            }
+        }
         Shape::Line { a, b } => line(*a, *b),
         Shape::Circle { center, radius } => {
             append_arc(out, *center, *radius, 0.0, TAU, t, color, id, tolerance)
@@ -152,6 +277,60 @@ fn append_shape(
             color,
             entity: id,
         }),
+        Shape::RadialDimension {
+            center,
+            edge,
+            at,
+            diameter,
+        } => {
+            line(*center, *edge);
+            line(*edge, *at);
+            let size = doc_unit_text_height(doc);
+            let direction = (*edge - *center) * (1.0 / center.distance(*edge));
+            let normal = Point::new(-direction.y, direction.x);
+            line(*edge, *edge - direction * size + normal * (size * 0.3));
+            line(*edge, *edge - direction * size - normal * (size * 0.3));
+            out.labels.push(Label {
+                at: t.apply(*at),
+                text: format!(
+                    "{}{:.2}",
+                    if *diameter { "Ø" } else { "R" },
+                    center.distance(*edge) * if *diameter { 2.0 } else { 1.0 }
+                ),
+                height: size * t.scale(),
+                rotation: t.angle(),
+                color,
+                entity: id,
+            });
+        }
+        Shape::Leader {
+            points,
+            text,
+            height,
+        } => {
+            for pair in points.windows(2) {
+                line(pair[0], pair[1]);
+            }
+            let direction =
+                (points[1] - points[0]) * (1.0 / points[0].distance(points[1]).max(1e-12));
+            let normal = Point::new(-direction.y, direction.x);
+            line(
+                points[0],
+                points[0] + direction * (*height) + normal * (*height * 0.25),
+            );
+            line(
+                points[0],
+                points[0] + direction * (*height) - normal * (*height * 0.25),
+            );
+            out.labels.push(Label {
+                at: t.apply(*points.last().unwrap()),
+                text: text.clone(),
+                height: height * t.scale(),
+                rotation: t.angle(),
+                color,
+                entity: id,
+            });
+        }
         Shape::Dimension {
             a,
             b,
@@ -210,6 +389,7 @@ fn append_shape(
                         cx: c.x,
                         cy: c.y,
                         color: fill,
+                        entity: id,
                     });
                 }
             } else if let Some(b) = Bounds::from_points(boundary) {
@@ -307,6 +487,23 @@ fn shape_bounds(doc: &Document, s: &Shape, t: Transform, depth: usize) -> Option
         return None;
     }
     let points: Vec<Point> = match s {
+        Shape::Point { at } => vec![*at],
+        Shape::Ellipse {
+            center,
+            major,
+            ratio,
+            ..
+        } => {
+            let x = (major.x.powi(2) + (major.y * ratio).powi(2)).sqrt();
+            let y = (major.y.powi(2) + (major.x * ratio).powi(2)).sqrt();
+            vec![
+                *center - Point::new(x, y),
+                *center + Point::new(x, y),
+                *center + Point::new(-x, y),
+                *center + Point::new(x, -y),
+            ]
+        }
+        Shape::Spline { control_points, .. } => control_points.clone(),
         Shape::Line { a, b } => vec![*a, *b],
         Shape::Circle { center, radius } | Shape::Arc { center, radius, .. } => vec![
             *center - Point::new(*radius, *radius),
@@ -360,6 +557,7 @@ fn shape_bounds(doc: &Document, s: &Shape, t: Transform, depth: usize) -> Option
             let e = Entity {
                 id: 0,
                 layer: "0".into(),
+                style: Default::default(),
                 shape: s.clone(),
             };
             let b = entity_batch(doc, &e, 1.0).bounds()?;

@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import Darwin
 
 let nativeDocumentType = "xyz.ckakkar.maccad.drawing"
 
@@ -13,8 +14,9 @@ let nativeDocumentType = "xyz.ckakkar.maccad.drawing"
     override class var autosavesInPlace: Bool { true }
     override class var preservesVersions: Bool { true }
     override func makeWindowControllers() {
-        let window = NSWindow(contentRect:NSRect(x:0,y:0,width:1200,height:800),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
-        window.minSize = NSSize(width:900,height:600)
+        let window = NSWindow(contentRect:NSRect(x:0,y:0,width:1320,height:880),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
+        window.minSize = NSSize(width:1050,height:660)
+        window.tabbingMode = .preferred
         window.title = "Untitled"
         window.titlebarAppearsTransparent = true
         window.contentView = NSHostingView(rootView:WorkspaceView(model:editor))
@@ -47,9 +49,18 @@ let nativeDocumentType = "xyz.ckakkar.maccad.drawing"
     @objc func undoCommand(_ sender: Any?) { editor.execute("UNDO") }
     @objc func redoCommand(_ sender: Any?) { editor.execute("REDO") }
     @objc func selectAllObjects(_ sender: Any?) { editor.operation(["op":"select_all"]) }
+    @objc func selectAll(_ sender:Any?){editor.operation(["op":"select_all"])}
     @objc func eraseObjects(_ sender: Any?) { editor.execute("ERASE") }
     @objc func zoomExtents(_ sender: Any?) { editor.fitView?() }
     @objc func cancelCommand(_ sender: Any?) { editor.cancel() }
+    @objc func startTool(_ sender:NSMenuItem){if let raw = sender.representedObject as? String,let tool = Tool(rawValue:raw){editor.choose(tool)}}
+    @objc func runCADCommand(_ sender:NSMenuItem){if let command = sender.representedObject as? String{editor.execute(command)}}
+    @objc func copy(_ sender:Any?){editor.copySelection()}
+    @objc func cut(_ sender:Any?){editor.copySelection(cut:true)}
+    @objc func paste(_ sender:Any?){editor.pasteSelection()}
+    @objc func toggleCommandHistory(_ sender:Any?){editor.showCommandHistory.toggle()}
+    @objc func toggleProperties(_ sender:Any?){editor.showProperties.toggle()}
+    @objc func toggleOrtho(_ sender:Any?){editor.ortho.toggle();if editor.ortho{editor.polar = false}}
     @objc func exportDXF(_ sender: Any?) {
         let alert = NSAlert(); alert.messageText = "Export the supported DXF subset?"
         alert.informativeText = "Exports DXF R2013. Dimensions and hatches become lines/text; solid fills and annotation editing semantics are lost. Layer colors are approximated. Save a native .maccad copy to retain your work."
@@ -77,9 +88,11 @@ let nativeDocumentType = "xyz.ckakkar.maccad.drawing"
                 let core = CADCore()
                 var input = url
                 var temporary: URL?
-                if ext == "dwg" { input = try await DWGImport.convert(url); temporary = input.deletingLastPathComponent() }
+                var conversionWarnings:[String] = []
+                if ext == "dwg" {let converted = try await DWGImport.convert(url);input = converted.file;conversionWarnings = converted.warnings;temporary = input.deletingLastPathComponent()}
                 defer { if let temporary { try? FileManager.default.removeItem(at:temporary) } }
-                let state = try await core.request(["op":"import_dxf","path":input.path])
+                var state = try await core.request(["op":"import_dxf","path":input.path])
+                state["diagnostics"] = (state["diagnostics"] as? [String] ?? [])+conversionWarnings
                 let doc = DrawingDocument(core:core,imported:true)
                 addDocument(doc); doc.makeWindowControllers()
                 doc.editor.apply(state)
@@ -95,7 +108,8 @@ let nativeDocumentType = "xyz.ckakkar.maccad.drawing"
 }
 
 enum DWGImport {
-    static func convert(_ source: URL) async throws -> URL {
+    struct Conversion {let file:URL;let warnings:[String]}
+    static func convert(_ source: URL) async throws -> Conversion {
         try await Task.detached(priority:.userInitiated) {
             // Never execute a drawing-specified command, search PATH, or use a shell.
             let candidates = [Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/dwg2dxf").path,"/opt/homebrew/bin/dwg2dxf","/usr/local/bin/dwg2dxf"]
@@ -111,11 +125,14 @@ enum DWGImport {
             let process = Process(); process.executableURL = URL(fileURLWithPath:executable); process.arguments = ["-o",output.path,source.path]; process.standardOutput = handle; process.standardError = handle
             do {
                 try process.run()
-                let timeout = DispatchWorkItem { if process.isRunning { process.terminate() } }
+                let timeout = DispatchWorkItem {if process.isRunning {process.terminate();DispatchQueue.global().asyncAfter(deadline:.now()+2){if process.isRunning{kill(process.processIdentifier,SIGKILL)}}}}
                 DispatchQueue.global().asyncAfter(deadline:.now()+30,execute:timeout)
                 process.waitUntilExit(); timeout.cancel()
                 guard process.terminationStatus == 0, FileManager.default.fileExists(atPath:output.path) else { throw CoreError.message("LibreDWG could not convert this drawing (exit \(process.terminationStatus)). No drawing was opened.") }
-                return output
+                let reader = try FileHandle(forReadingFrom:log);defer{try? reader.close()}
+                let logData = try reader.read(upToCount:65536) ?? Data()
+                let warnings = String(decoding:logData,as:UTF8.self).split(separator:"\n").filter{$0.contains("Warning:") || $0.contains("ERROR:")}.prefix(40).map(String.init)
+                return Conversion(file:output,warnings:warnings)
             } catch { try? FileManager.default.removeItem(at:dir); throw error }
         }.value
     }

@@ -2,13 +2,14 @@ import AppKit
 import MetalKit
 import SwiftUI
 
-private struct GPUVertex { var position: SIMD2<Float>; var color: SIMD4<Float> }
-private struct ViewUniforms { var center: SIMD2<Float>; var scale: SIMD2<Float> }
+private struct GPUVertex { var position: SIMD2<Float>; var color: SIMD4<Float>; var width:Float = 1 }
+private struct ViewUniforms { var center: SIMD2<Float>; var scale: SIMD2<Float>;var viewport:SIMD2<Float> }
 
 final class MetalDrawing: NSObject, MTKViewDelegate {
     let device: MTLDevice
     let queue: MTLCommandQueue
     let pipeline: MTLRenderPipelineState
+    let strokePipeline:MTLRenderPipelineState
     var camera = Camera()
     var size = NSSize(width: 1, height: 1)
     var origin = CADPoint.zero
@@ -24,11 +25,18 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
         let source = """
         #include <metal_stdlib>
         using namespace metal;
-        struct V { float2 position; float4 color; };
-        struct U { float2 center; float2 scale; };
+        struct V { float2 position; float4 color; float width; };
+        struct U { float2 center; float2 scale; float2 viewport; };
         struct O { float4 position [[position]]; float4 color; };
         vertex O drawing_vertex(uint i [[vertex_id]], const device V *v [[buffer(0)]], constant U &u [[buffer(1)]]) {
             O o; o.position=float4((v[i].position-u.center)*u.scale,0,1); o.color=v[i].color; return o;
+        }
+        vertex O stroke_vertex(uint i [[vertex_id]], const device V *v [[buffer(0)]], constant U &u [[buffer(1)]]) {
+            uint segment=(i/6)*2; float2 a=(v[segment].position-u.center)*u.scale;float2 b=(v[segment+1].position-u.center)*u.scale;
+            float2 direction=(b-a)*u.viewport;float len=length(direction);float2 normal=len>0 ? float2(-direction.y,direction.x)/len : float2(0,1);
+            const float2 corners[6]={float2(0,-1),float2(1,-1),float2(1,1),float2(0,-1),float2(1,1),float2(0,1)};
+            float2 corner=corners[i%6];float2 p=mix(a,b,corner.x)+normal*corner.y*v[segment].width/u.viewport;
+            O o;o.position=float4(p,0,1);o.color=v[segment].color;return o;
         }
         fragment float4 drawing_fragment(O in [[stage_in]]) { return in.color; }
         """
@@ -43,10 +51,12 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
         descriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
         descriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
         pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+        descriptor.vertexFunction = library.makeFunction(name:"stroke_vertex")
+        strokePipeline = try device.makeRenderPipelineState(descriptor:descriptor)
         super.init()
         view.delegate = self; view.isPaused = true; view.enableSetNeedsDisplay = true
     }
-    func upload(_ scene: Scene, camera: Camera, size: NSSize, grid: Bool) {
+    func upload(_ scene: Scene, camera: Camera, size: NSSize, grid: Bool, lineWeights:Bool = false) {
         origin = camera.center
         var lines: [GPUVertex] = []; lines.reserveCapacity(scene.segments.count*2+512)
         var fills: [GPUVertex] = []; fills.reserveCapacity(scene.triangles.count*3)
@@ -65,7 +75,9 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
         }
         for s in scene.segments {
             let c = SIMD4<Float>(s.color.0,s.color.1,s.color.2,s.color.3)
-            lines.append(vertex(s.ax,s.ay,c)); lines.append(vertex(s.bx,s.by,c))
+            var a = vertex(s.ax,s.ay,c), b = vertex(s.bx,s.by,c)
+            a.width = lineWeights ? max(0.75,s.line_weight*2.83465):1;b.width = a.width
+            lines.append(a);lines.append(b)
         }
         for t in scene.triangles {
             let c = SIMD4<Float>(t.color.0,t.color.1,t.color.2,t.color.3)
@@ -79,10 +91,10 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
     func draw(in view: MTKView) {
         guard size.width > 0, size.height > 0, let pass = view.currentRenderPassDescriptor, let drawable = view.currentDrawable, let command = queue.makeCommandBuffer(), let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { return }
         encoder.setRenderPipelineState(pipeline)
-        var uniforms = ViewUniforms(center: .init(Float(camera.center.x-origin.x),Float(camera.center.y-origin.y)),scale: .init(Float(2*camera.scale/size.width),Float(2*camera.scale/size.height)))
+        var uniforms = ViewUniforms(center: .init(Float(camera.center.x-origin.x),Float(camera.center.y-origin.y)),scale: .init(Float(2*camera.scale/size.width),Float(2*camera.scale/size.height)),viewport:.init(Float(size.width),Float(size.height)))
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<ViewUniforms>.stride, index: 1)
         if let buffer = fillBuffer { encoder.setVertexBuffer(buffer, offset: 0, index: 0); encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: fillCount) }
-        if let buffer = lineBuffer { encoder.setVertexBuffer(buffer, offset: 0, index: 0); encoder.drawPrimitives(type: .line, vertexStart: 0, vertexCount: lineCount) }
+        if let buffer = lineBuffer {encoder.setRenderPipelineState(strokePipeline);encoder.setVertexBuffer(buffer,offset:0,index:0);encoder.drawPrimitives(type:.triangle,vertexStart:0,vertexCount:lineCount/2*6)}
         encoder.endEncoding(); command.present(drawable); command.commit()
     }
 }
@@ -104,6 +116,10 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
     private var tracking: NSTrackingArea?
     private var motionSerial = 0
     private var isPanning = false
+    private var selectionStart: CADPoint?
+    private var selectionEnd: CADPoint?
+    private var extendSelection = false
+    private var gestureGeneration = 0
     override var acceptsFirstResponder: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { bounds.contains(point) ? self : nil }
 
@@ -114,12 +130,14 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
         do { renderer = try MetalDrawing(view: metal) } catch { model.show(error) }
         setAccessibilityElement(true); setAccessibilityRole(.group); setAccessibilityLabel("Drawing canvas")
         model.invalidate = { [weak self] in self?.refresh(force: true) }
-        model.cancelGesture = { [weak self] in self?.points = []; self?.snapKind = "none"; self?.overlay.needsDisplay = true }
+        model.cancelGesture = { [weak self] in self?.gestureGeneration += 1; self?.points = []; self?.selectionStart = nil; self?.selectionEnd = nil; self?.snapKind = "none"; self?.overlay.needsDisplay = true }
         model.fitView = { [weak self] in self?.fit() }
         model.acceptCoordinate = { [weak self] p, relative in
             guard let self else {return}
             self.accept(relative ? (self.points.last ?? .zero)+p : p)
         }
+        model.finishGesture = { [weak self] in self?.completePath() }
+        model.acceptScalar = { [weak self] value in self?.scalar(value) }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
     override func layout() { super.layout(); metal.frame = bounds; overlay.frame = bounds; refresh(force: true) }
@@ -145,7 +163,7 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
             do {
                 let result = try await model.core.scene(bounds: b, tolerance: 0.35/scale)
                 scene = result; sceneBounds = b; sceneRevision = revision
-                renderer?.upload(result, camera: camera, size: bounds.size, grid: model.grid)
+                renderer?.upload(result, camera: camera, size: bounds.size, grid: model.grid, lineWeights:model.lineWeights)
                 renderer?.camera = camera; renderer?.size = bounds.size
                 metal.needsDisplay = true; overlay.needsDisplay = true
             } catch { model.show(error) }
@@ -161,7 +179,7 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
         cursor = constrained(p); model.coordinate = cursor; snapKind = "none"; overlay.needsDisplay = true
         guard model.snapping else { return }
         Task {
-            guard let response = try? await model.core.request(["op":"snap","point":p.json,"tolerance":9/camera.scale]), serial == motionSerial else { return }
+            guard let response = try? await model.core.request(["op":"snap","point":p.json,"tolerance":9/camera.scale,"base":points.last?.json as Any? ?? NSNull()]), serial == motionSerial else { return }
             if let q = response["point"] as? [String:Double] {
                 cursor = CADPoint(x:q["x"] ?? p.x,y:q["y"] ?? p.y); snapKind = response["kind"] as? String ?? "none"
                 if snapKind == "none" { cursor = constrained(cursor) }
@@ -180,22 +198,33 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
         window?.makeFirstResponder(self)
         if event.modifierFlags.contains(.option) { isPanning = true; return }
         let p = camera.world(convert(event.locationInWindow, from:nil),size:bounds.size)
+        if model.tool == .select { selectionStart = p; selectionEnd = nil; extendSelection = event.modifierFlags.contains(.shift); return }
+        let generation = gestureGeneration
         Task {
             var q = constrained(p)
-            if model.snapping, let result = try? await model.core.request(["op":"snap","point":p.json,"tolerance":9/camera.scale]), result["kind"] as? String != "none", let v = result["point"] as? [String:Double] { q = CADPoint(x:v["x"] ?? p.x,y:v["y"] ?? p.y) }
-            accept(q, shift: event.modifierFlags.contains(.shift))
+            if model.snapping, let result = try? await model.core.request(["op":"snap","point":p.json,"tolerance":9/camera.scale,"base":points.last?.json as Any? ?? NSNull()]), result["kind"] as? String != "none", let v = result["point"] as? [String:Double] { q = CADPoint(x:v["x"] ?? p.x,y:v["y"] ?? p.y) }
+            if generation == gestureGeneration { accept(q, shift: event.modifierFlags.contains(.shift)) }
         }
     }
     func accept(_ p: CADPoint, shift: Bool = false) {
         if model.tool == .select { model.operation(["op":"pick","point":p.json,"tolerance":7/camera.scale,"extend":shift]); return }
         points.append(p); cursor = p
         switch model.tool {
-        case .line where points.count == 2: finish("LINE \(points[0].command) \(p.command)")
+        case .line where points.count == 2: finish("LINE \(points[0].command) \(p.command)"); points = [p]
         case .rectangle where points.count == 2, .hatch where points.count == 2:
             let a = points[0]
             if model.tool == .hatch { finish("HATCH diagonal \(max(a.distance(p)/30,0.01)) \(a.command) \(CADPoint(x:p.x,y:a.y).command) \(p.command) \(CADPoint(x:a.x,y:p.y).command)") }
             else { finish("RECT \(a.command) \(p.command)") }
         case .circle where points.count == 2: finish("CIRCLE \(points[0].command) \(points[0].distance(p))")
+        case .point: finish("POINT \(p.command)")
+        case .ellipse where points.count == 3:
+            let center = points[0]; let major = points[1]-center; let axis = major.distance(.zero)
+            guard axis > 1e-9 else { points = []; return }
+            let d = p-center; let minor = abs((-major.y*d.x+major.x*d.y)/axis)
+            finish("ELLIPSE \(center.command) \(points[1].command) \(min(minor/axis,1))")
+        case .polygon where points.count == 2:
+            let sides = promptNumber("Polygon","Number of sides","6")
+            if let sides { finish("POLYGON \(sides) \(points[0].command) \(points[0].distance(p))") } else { points = [] }
         case .arc where points.count == 3:
             let c = points[0]; let a = points[1]-c; let b = p-c
             let start = atan2(a.y,a.x)*180 / .pi
@@ -205,21 +234,59 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
             let a = points[0], b = points[1]; let d = b-a
             let offset = ((p.x-a.x)*(-d.y)+(p.y-a.y)*d.x)/hypot(d.x,d.y)
             finish("DIMALIGNED \(a.command) \(b.command) \(offset)")
+        case .radius where points.count == 3: finish("DIMRADIUS \(points[0].command) \(points[1].command) \(p.command)")
+        case .leader where points.count == 2:
+            let alert = NSAlert();alert.messageText = "Leader text";let field = NSTextField(string:"Note");field.frame = NSRect(x:0,y:0,width:300,height:26);alert.accessoryView = field;alert.addButton(withTitle:"Add");alert.addButton(withTitle:"Cancel")
+            if alert.runModal() == .alertFirstButtonReturn { finish("LEADER \(points[0].command) \(p.command) \(textHeight) \(field.stringValue)") } else {points = []}
+        case .rotate, .scale:
+            if let value = promptNumber(model.tool.title,model.tool == .rotate ? "Rotation angle in degrees" : "Positive scale factor",model.tool == .rotate ? "90" : "2") {scalar(value)} else {points = []}
+        case .mirror where points.count == 2: finish("MIRROR \(points[0].command) \(p.command)"); model.tool = .select
+        case .trim where points.count == 3, .extend where points.count == 3:
+            finish("\(model.tool == .trim ? "TRIM" : "EXTEND") \(points[0].command) \(points[1].command) \(p.command)");model.tool = .select
+        case .measure where points.count == 2:
+            model.message = String(format:"Distance %.4f %@ · ΔX %.4f · ΔY %.4f",points[0].distance(p),model.units,p.x-points[0].x,p.y-points[0].y);model.commandHistory.append(model.message);points = []
         case .move where points.count == 2, .copy where points.count == 2: finish("\(model.tool == .move ? "MOVE" : "COPY") \((p-points[0]).command)")
         case .text:
             let alert = NSAlert(); alert.messageText = "Add text"
             let field = NSTextField(string: "Room name"); field.frame = NSRect(x:0,y:0,width:300,height:26); alert.accessoryView = field
             alert.addButton(withTitle:"Add"); alert.addButton(withTitle:"Cancel")
-            if alert.runModal() == .alertFirstButtonReturn { finish("TEXT \(p.command) \(model.units == "m" ? 0.15 : 150) \(field.stringValue)") } else { points = [] }
+            if alert.runModal() == .alertFirstButtonReturn { finish("TEXT \(p.command) \(textHeight) \(field.stringValue)") } else { points = [] }
         default: break
         }
         overlay.needsDisplay = true
     }
     func finish(_ text: String) { points = []; model.execute(text); overlay.needsDisplay = true }
-    override func mouseDragged(with event: NSEvent) {
-        if isPanning { camera.center.x -= event.deltaX/camera.scale; camera.center.y += event.deltaY/camera.scale; refresh() } else { mouseMoved(with:event) }
+    var textHeight: Double { ["mm":150,"cm":15,"m":0.15,"in":6,"ft":0.5][model.units] ?? 150 }
+    func promptNumber(_ title: String,_ detail: String,_ value: String) -> Double? {
+        let alert = NSAlert();alert.messageText = title;alert.informativeText = detail
+        let field = NSTextField(string:value);field.frame = NSRect(x:0,y:0,width:240,height:26);alert.accessoryView = field;alert.addButton(withTitle:"Apply");alert.addButton(withTitle:"Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn, let value = Double(field.stringValue), value.isFinite else { return nil };return value
     }
-    override func mouseUp(with event: NSEvent) { isPanning = false }
+    func scalar(_ value: Double) {
+        guard value.isFinite else {return}
+        if model.tool == .circle, points.count == 1 {finish("CIRCLE \(points[0].command) \(value)")}
+        else if model.tool == .rotate || model.tool == .scale, let base = points.first {finish("\(model.tool.rawValue.uppercased()) \(base.command) \(value)"); model.tool = .select}
+        else if model.tool == .line, let base = points.last {let d = cursor-base;let p = base+d*(value/max(d.distance(.zero),1e-9));accept(p)}
+        else {model.message = "This tool needs a coordinate (x,y)"}
+    }
+    func completePath() {
+        if model.tool == .polyline, points.count >= 2 {finish("PLINE "+points.map(\.command).joined(separator:" "))}
+        else if model.tool == .spline, points.count >= 2 {finish("SPLINE "+points.map(\.command).joined(separator:" "))}
+        else {points = [];model.tool = .select;overlay.needsDisplay = true}
+    }
+    override func mouseDragged(with event: NSEvent) {
+        if isPanning { camera.center.x -= event.deltaX/camera.scale; camera.center.y += event.deltaY/camera.scale; refresh() }
+        else if selectionStart != nil {selectionEnd = camera.world(convert(event.locationInWindow,from:nil),size:bounds.size);overlay.needsDisplay = true}
+        else { mouseMoved(with:event) }
+    }
+    override func mouseUp(with event: NSEvent) {
+        isPanning = false
+        guard let start = selectionStart else {return};let end = selectionEnd
+        selectionStart = nil;selectionEnd = nil;overlay.needsDisplay = true
+        if let end, start.distance(end)*camera.scale>3 {
+            model.operation(["op":"select_window","bounds":["min":CADPoint(x:min(start.x,end.x),y:min(start.y,end.y)).json,"max":CADPoint(x:max(start.x,end.x),y:max(start.y,end.y)).json],"crossing":end.x<start.x,"extend":extendSelection])
+        } else {model.operation(["op":"pick","point":start.json,"tolerance":7/camera.scale,"extend":extendSelection])}
+    }
     override func otherMouseDragged(with event: NSEvent) { camera.center.x -= event.deltaX/camera.scale; camera.center.y += event.deltaY/camera.scale; refresh() }
     override func scrollWheel(with event: NSEvent) {
         if event.modifierFlags.contains(.command) || !event.hasPreciseScrollingDeltas { zoom(exp(event.scrollingDeltaY*0.025),event:event) }
@@ -238,12 +305,20 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
         switch event.keyCode {
         case 53: model.cancel()
         case 51,117: model.execute("ERASE")
-        case 36,76: if model.tool == .polyline, points.count >= 2 { finish("PLINE "+points.map(\.command).joined(separator:" ")) }
-        default: super.keyDown(with:event)
+        case 36,76: completePath()
+        case 99: model.snapping.toggle()
+        case 100: model.ortho.toggle()
+        default: if let text = event.characters, !event.modifierFlags.contains(.command), text.unicodeScalars.allSatisfy({$0.value>=32&&$0.value<127}) {model.commandText += text;model.focusCommand?()} else {super.keyDown(with:event)}
         }
     }
     fileprivate func drawOverlay() {
         let size = bounds.size
+        if let start = selectionStart, let end = selectionEnd {
+            let a = camera.screen(start,size:size), b = camera.screen(end,size:size)
+            let rect = NSRect(x:min(a.x,b.x),y:min(a.y,b.y),width:abs(a.x-b.x),height:abs(a.y-b.y))
+            let color: NSColor = end.x<start.x ? .systemGreen : .systemBlue
+            color.withAlphaComponent(0.12).setFill();NSBezierPath(rect:rect).fill();color.setStroke();let outline = NSBezierPath(rect:rect);if end.x<start.x{outline.setLineDash([5,3],count:2,phase:0)};outline.stroke()
+        }
         for label in scene.labels {
             let at = camera.screen(label.at,size:size); let height = label.height*camera.scale
             guard height >= 3, height < 2000, at.x > -2000, at.x < size.width+2000, at.y > -2000, at.y < size.height+2000 else { continue }

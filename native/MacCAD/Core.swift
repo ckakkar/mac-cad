@@ -22,6 +22,8 @@ struct CADLayer: Codable, Identifiable {
     var color: [Float]
     var visible: Bool
     var locked: Bool
+    var line_type: String
+    var line_weight: Float
     var id: String { name }
 }
 struct CADLabel: Codable {
@@ -46,9 +48,13 @@ enum CoreError: LocalizedError {
 /// document's serial queue. Swift owns immutable snapshots only.
 final class CADCore: @unchecked Sendable {
     private let queue = DispatchQueue(label: "xyz.ckakkar.maccad.document", qos: .userInitiated)
+    private let queueKey = DispatchSpecificKey<Bool>()
     private let handle: OpaquePointer
-    init() { handle = cad_create()! }
-    deinit { queue.sync { cad_destroy(handle) } }
+    init() { handle = cad_create()!; queue.setSpecific(key:queueKey,value:true) }
+    deinit {
+        if DispatchQueue.getSpecific(key:queueKey) == true { cad_destroy(handle) }
+        else { queue.sync { cad_destroy(handle) } }
+    }
 
     private func perform(_ payload: [String: Any]) throws -> [String: Any] {
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
@@ -68,10 +74,11 @@ final class CADCore: @unchecked Sendable {
     /// its queue; editing/scene work cannot race serialization.
     func requestSync(_ payload: [String: Any]) throws -> [String: Any] { try queue.sync { try perform(payload) } }
 
-    func scene(bounds: CADBounds, tolerance: Double) async throws -> Scene {
+    func scene(bounds: CADBounds, tolerance: Double, highlight:Bool = true) async throws -> Scene {
         try await withCheckedThrowingContinuation { continuation in
             queue.async { [self] in
-                guard let batch = cad_render(handle, bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y, tolerance) else {
+                let pointer = highlight ? cad_render(handle,bounds.min.x,bounds.min.y,bounds.max.x,bounds.max.y,tolerance):cad_render_plain(handle,bounds.min.x,bounds.min.y,bounds.max.x,bounds.max.y,tolerance)
+                guard let batch = pointer else {
                     continuation.resume(throwing: CoreError.message("Unable to render drawing")); return
                 }
                 defer { cad_batch_free(batch) }

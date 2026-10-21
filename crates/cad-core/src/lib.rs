@@ -1,6 +1,9 @@
 pub mod commands;
+pub mod curves;
+pub mod drafting;
 pub mod exchange;
 pub mod ffi;
 pub mod geometry;
 pub mod model;
 pub mod render;
+pub mod snapping;

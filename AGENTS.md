@@ -81,8 +81,13 @@ at `../trav`. Read its current release workflow when working on distribution.
 Follow its user-facing model while retaining this app's native Swift stack:
 
 - A stable `MacCAD.dmg` asset on GitHub Releases; drag the app into Applications.
-- Release on pushes to `main` after successful CI; version releases monotonically
-  from the release line plus the commit count, and release the exact tested SHA.
+- Run CI on pushes to `main`; version releases monotonically from the release
+  line plus the commit count, and release the exact tested SHA.
+- The owner chose to keep the private Sparkle key local in macOS Keychain account
+  `xyz.ckakkar.maccad`. Sign releases locally with that account. Do not export,
+  transfer, or add it to GitHub secrets without new explicit authorization. The
+  public key in `config/SparklePublicKey` belongs to MacCAD. Cloud publishing is
+  opt-in through `MACCAD_CLOUD_RELEASES=true` and is currently disabled.
 - In-app update checks, release notes, signed update artifacts, and an HTTPS feed.
   Use a maintained native updater such as Sparkle rather than a homegrown installer.
 - Update signatures are separate from Apple code signing. Never disable signature

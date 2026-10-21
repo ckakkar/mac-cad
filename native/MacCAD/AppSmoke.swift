@@ -34,6 +34,16 @@ import MetalKit
             let pdf = directory.appendingPathComponent("drawing.pdf")
             try PDFPlot.write(scene,bounds:bounds,page:CGRect(x:0,y:0,width:1190,height:842),scale:0.1,url:pdf)
             guard try Data(contentsOf:pdf).starts(with:Data("%PDF".utf8)) else { throw CoreError.message("Invalid PDF output") }
+            let fixtures = URL(fileURLWithPath:FileManager.default.currentDirectoryPath).appendingPathComponent(".build/libredwg-0.14/test/test-data")
+            for version in ["2000","2013","2018"] {
+                let input = fixtures.appendingPathComponent("\(version)/Line.dwg")
+                guard FileManager.default.fileExists(atPath:input.path) else{throw CoreError.message("Missing upstream LibreDWG QA fixture: \(version)/Line.dwg")}
+                let conversion = try await DWGImport.convert(input)
+                defer{try? FileManager.default.removeItem(at:conversion.file.deletingLastPathComponent())}
+                let imported = CADCore();let state = try await imported.request(["op":"import_dxf","path":conversion.file.path])
+                guard (state["count"] as? Int ?? 0)>0 else{throw CoreError.message("DWG \(version) fixture imported no geometry")}
+                print("Bundled DWG import passed: LibreDWG upstream \(version)/Line.dwg")
+            }
             print("App integration passed: NSDocument safe save/reopen, recovery payload, worker queue, binary scene, Metal pipeline and PDF output.")
             return 0
         } catch { fputs("App integration failed: \(error.localizedDescription)\n",stderr); return 1 }

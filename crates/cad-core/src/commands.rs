@@ -17,14 +17,14 @@ impl RTreeObject for Indexed {
     }
 }
 #[derive(Clone)]
-struct Settings {
-    layers: Vec<Layer>,
-    units: String,
-    current_layer: String,
-    blocks: BTreeMap<String, Vec<Shape>>,
+pub(crate) struct Settings {
+    pub(crate) layers: Vec<Layer>,
+    pub(crate) units: String,
+    pub(crate) current_layer: String,
+    pub(crate) blocks: BTreeMap<String, Vec<Shape>>,
 }
 impl Settings {
-    fn of(d: &Document) -> Self {
+    pub(crate) fn of(d: &Document) -> Self {
         Self {
             layers: d.layers.clone(),
             units: d.units.clone(),
@@ -64,8 +64,9 @@ impl Default for Engine {
     }
 }
 impl Engine {
-    pub fn new(doc: Document) -> Result<Self, String> {
+    pub fn new(mut doc: Document) -> Result<Self, String> {
         doc.validate()?;
+        doc.format_version = 2;
         let mut e = Self {
             doc,
             selected: BTreeSet::new(),
@@ -96,7 +97,7 @@ impl Engine {
                 .collect(),
         );
     }
-    fn editable(&self, e: &Entity) -> bool {
+    pub(crate) fn editable(&self, e: &Entity) -> bool {
         self.doc
             .layer(&e.layer)
             .is_some_and(|l| l.visible && !l.locked)
@@ -112,7 +113,7 @@ impl Engine {
             .filter_map(|e| entity_bounds(&self.doc, e))
             .reduce(|a, b| a.union(b))
     }
-    fn ids_in(&self, b: Bounds) -> Vec<u64> {
+    pub(crate) fn ids_in(&self, b: Bounds) -> Vec<u64> {
         self.index
             .locate_in_envelope_intersecting(&AABB::from_corners(
                 [b.min.x, b.min.y],
@@ -122,6 +123,9 @@ impl Engine {
             .collect()
     }
     pub fn batch(&self, b: Bounds, tolerance: f64) -> Batch {
+        self.batch_mode(b, tolerance, true)
+    }
+    pub fn batch_mode(&self, b: Bounds, tolerance: f64, highlight: bool) -> Batch {
         let mut batch = Batch::default();
         for id in self.ids_in(b) {
             let e = &self.doc.entities[&id];
@@ -129,7 +133,7 @@ impl Engine {
                 continue;
             }
             let mut eb = entity_batch(&self.doc, e, tolerance);
-            if self.selected.contains(&id) {
+            if highlight && self.selected.contains(&id) {
                 for s in &mut eb.segments {
                     s.color = [0.29, 0.67, 1.0, 1.0];
                 }
@@ -155,7 +159,7 @@ impl Engine {
                 if !self.editable(e) {
                     return None;
                 }
-                let batch = entity_batch(&self.doc, e, tolerance * 0.1);
+                let batch = crate::render::entity_geometry(&self.doc, e, tolerance * 0.1);
                 let mut d = batch
                     .segments
                     .iter()
@@ -181,58 +185,9 @@ impl Engine {
             .map(|v| v.0)
     }
     pub fn snap(&self, p: Point, tolerance: f64) -> Value {
-        let b = Bounds {
-            min: p - Point::new(tolerance, tolerance),
-            max: p + Point::new(tolerance, tolerance),
-        };
-        let mut candidates = Vec::new();
-        for id in self.ids_in(b) {
-            let e = &self.doc.entities[&id];
-            if !self.visible(e) {
-                continue;
-            }
-            match &e.shape {
-                Shape::Line { a, b } => {
-                    candidates.extend([
-                        (*a, "endpoint"),
-                        (*b, "endpoint"),
-                        ((*a + *b) * 0.5, "midpoint"),
-                    ]);
-                }
-                Shape::Polyline { vertices, .. } => {
-                    for v in vertices {
-                        candidates.push((v.point, "endpoint"));
-                    }
-                }
-                Shape::Circle { center, radius } | Shape::Arc { center, radius, .. } => {
-                    candidates.push((*center, "center"));
-                    for i in 0..4 {
-                        let a = i as f64 * std::f64::consts::FRAC_PI_2;
-                        candidates.push((
-                            *center + Point::new(a.cos(), a.sin()) * (*radius),
-                            "quadrant",
-                        ));
-                    }
-                }
-                _ => {
-                    let eb = entity_batch(&self.doc, e, tolerance * 0.1);
-                    for s in eb.segments.iter().take(2000) {
-                        candidates.push((Point::new(s.ax, s.ay), "endpoint"));
-                    }
-                }
-            }
-        }
-        if let Some((point, kind)) = candidates
-            .into_iter()
-            .filter(|(q, _)| q.distance(p) <= tolerance)
-            .min_by(|a, b| a.0.distance(p).total_cmp(&b.0.distance(p)))
-        {
-            json!({"point":point,"kind":kind})
-        } else {
-            json!({"point":p,"kind":"none"})
-        }
+        self.precise_snap(p, tolerance, None)
     }
-    fn commit(
+    pub(crate) fn commit(
         &mut self,
         mut after: Vec<Entity>,
         remove: Vec<u64>,
@@ -240,6 +195,14 @@ impl Engine {
     ) -> Result<(), String> {
         for e in &after {
             e.shape.validate()?;
+            if !e.style.valid()
+                || self.doc.layer(&e.layer).is_none()
+                    && settings
+                        .as_ref()
+                        .is_none_or(|s| !s.layers.iter().any(|l| l.name == e.layer))
+            {
+                return Err("Invalid entity properties or layer".into());
+            }
             if e.id == 0 || e.id > 9_007_199_254_740_991 {
                 return Err("Entity ID limit reached".into());
             }
@@ -350,13 +313,14 @@ impl Engine {
             entities.push(Entity {
                 id,
                 layer: self.doc.current_layer.clone(),
+                style: Default::default(),
                 shape,
             });
         }
         self.commit(entities, Vec::new(), None)?;
         Ok(ids)
     }
-    fn selection(&self) -> Result<Vec<Entity>, String> {
+    pub(crate) fn selection(&self) -> Result<Vec<Entity>, String> {
         let v: Vec<_> = self
             .selected
             .iter()
@@ -426,6 +390,9 @@ impl Engine {
         json!({"revision":self.revision,"dirty":self.revision!=self.saved_revision,"count":self.doc.entities.len(),"selected":self.selected,"layers":self.doc.layers,"current_layer":self.doc.current_layer,"units":self.doc.units,"bounds":self.bounds(),"can_undo":!self.undo.is_empty(),"can_redo":!self.redo.is_empty(),"diagnostics":self.diagnostics,"blocks":self.doc.blocks.keys().collect::<Vec<_>>(),"selection":self.selected.iter().take(100).filter_map(|id|self.doc.entities.get(id)).collect::<Vec<_>>()})
     }
     pub fn dispatch(&mut self, v: Value) -> Result<Value, String> {
+        if let Some(result) = self.drafting_dispatch(&v) {
+            return result;
+        }
         match v["op"].as_str().unwrap_or("") {
             "state" => Ok(self.state()),
             "command" => {
@@ -484,7 +451,15 @@ impl Engine {
                 if !p.finite() || !tol.is_finite() || tol <= 0.0 {
                     return Err("Invalid snap point/tolerance".into());
                 }
-                Ok(self.snap(p, tol))
+                let base = v
+                    .get("base")
+                    .filter(|v| !v.is_null())
+                    .map(|v| serde_json::from_value::<Point>(v.clone()).map_err(|e| e.to_string()))
+                    .transpose()?;
+                if base.is_some_and(|b| !b.finite()) {
+                    return Err("Invalid snap base".into());
+                }
+                Ok(self.precise_snap(p, tol, base))
             }
             "serialize" => serde_json::to_value(&self.doc).map_err(|e| e.to_string()),
             "load" => {
@@ -525,6 +500,12 @@ impl Engine {
                     if let Some(c) = v.get("color") {
                         l.color = serde_json::from_value(c.clone()).map_err(|e| e.to_string())?;
                     }
+                    if let Some(s) = v["line_type"].as_str() {
+                        l.line_type = s.into();
+                    }
+                    if let Some(w) = v["line_weight"].as_f64() {
+                        l.line_weight = w as f32;
+                    }
                     if v["current"].as_bool() == Some(true) {
                         settings.current_layer = name.into();
                     }
@@ -557,6 +538,9 @@ impl Engine {
         }
     }
     pub fn command(&mut self, text: &str) -> Result<(), String> {
+        if let Some(result) = self.drafting_command(text) {
+            return result;
+        }
         let tokens: Vec<_> = text.split_whitespace().collect();
         let name = tokens
             .first()
@@ -768,6 +752,7 @@ impl Engine {
                 let insert = Entity {
                     id,
                     layer: self.doc.current_layer.clone(),
+                    style: Default::default(),
                     shape: Shape::Insert {
                         block: name.to_string(),
                         at: base,
@@ -803,6 +788,7 @@ impl Engine {
                             after.push(Entity {
                                 id,
                                 layer: e.layer.clone(),
+                                style: e.style.clone(),
                                 shape: shape.transformed(t),
                             });
                         }

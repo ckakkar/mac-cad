@@ -16,6 +16,7 @@ info = {
     "CFBundleName": "MacCAD", "CFBundleDisplayName": "MacCAD",
     "CFBundlePackageType": "APPL", "CFBundleShortVersionString": version,
     "CFBundleVersion": build, "LSMinimumSystemVersion": "14.0",
+    "MacCADSourceRevision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
     "NSHighResolutionCapable": True, "NSPrincipalClass": "NSApplication",
     "CFBundleIconFile": "AppIcon", "NSSupportsAutomaticTermination": False,
     "NSHumanReadableCopyright": "mac-cad contributors · GPL-3.0-or-later",
@@ -38,7 +39,7 @@ info = {
         for ext in ["dxf", "dwg"]
     ],
 }
-key = os.environ.get("SPARKLE_PUBLIC_KEY", "").strip()
+key = (os.environ.get("SPARKLE_PUBLIC_KEY") or Path("config/SparklePublicKey").read_text()).strip()
 if key:
     import base64
     assert len(base64.b64decode(key, validate=True)) == 32, "Invalid Sparkle public key"

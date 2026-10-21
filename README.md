@@ -1,104 +1,106 @@
 # MacCAD
 
-A native, open-source 2D CAD app for Apple Silicon. Built for architectural and
-interior drafting with Swift, AppKit/SwiftUI, Metal, and a Rust document engine.
+A native, open-source 2D CAD app for Apple Silicon. Swift, AppKit/SwiftUI and Metal
+around a double-precision Rust document engine, with local files and offline drafting.
 
-**Early development.** This is a working foundation and a limited drafting tool,
-not an AutoCAD replacement yet. Real-world drawing fidelity and baseline-M1 frame
-rates have not been qualified. See [compatibility](docs/COMPATIBILITY.md).
+[**Download MacCAD.dmg**](https://github.com/ckakkar/mac-cad/releases/latest/download/MacCAD.dmg)
+· Apple Silicon · macOS 14+ · [Releases](https://github.com/ckakkar/mac-cad/releases)
 
-## Build and run
+Open the DMG and drag MacCAD into Applications. This build is ad-hoc signed and
+**not notarized**; the first launch may need **Open Anyway** in System Settings →
+Privacy & Security. Updates are signed with MacCAD's own Sparkle key.
 
-Requires an Apple Silicon Mac, macOS 14+, Xcode Command Line Tools with a matching
-macOS SDK, Rust stable, Python 3, and network access for the first dependency fetch.
-Full Xcode is useful for profiling and notarization, but is not required for the
-Swift Package Manager build.
-
-```sh
-make run       # build and open build/MacCAD.app
-make check     # formatting, clippy, core tests, app build and integration checks
-make dmg       # build/MacCAD.dmg, with a drag-to-Applications install
-make bench     # 10k/100k entity CPU benchmarks
-```
-
-The first Swift build compiles system modules and can take several minutes.
-Build products and module caches stay inside the checkout.
+**Drafting preview.** MacCAD has useful drawing and editing tools, but does not yet
+have all of AutoCAD for Mac's 2D capabilities. DWG import is experimental; DWG
+saving, layouts, external references and full annotation fidelity are still missing.
+See the [compatibility matrix](docs/COMPATIBILITY.md) before using production drawings.
 
 ## Drawing
 
-Use the toolbar for selection, lines, polylines, rectangles, circles, arcs, text,
-aligned dimensions, rectangular hatches, move, and copy. Select **Open example
-plan** in an empty document for a generated architectural sketch.
+The workspace combines native document windows and menus with grouped Draw,
+Modify and Annotation tools, a Metal canvas, a command bar and a properties/layers
+inspector. Open the example plan from an empty document to try it.
 
-- Click to place points. Shift-click adds/removes objects from the selection.
-- Type a command or alias (`LINE`, `L`, `CIRCLE`, `C`, etc.) to start a tool, then
-  enter `x,y` points or `@dx,dy` relative coordinates in the command bar.
-- Use full commands for numeric editing: `LINE 0,0 3000,0`, `MOVE 500,0`,
-  `ROTATE 0,0 90`. The terminal button shows the command reference.
-- Escape cancels an unfinished gesture. Return on the canvas finishes a polyline.
+- Draw lines, bulged polylines, rectangles, polygons, circles, arcs, ellipses,
+  control-point splines, points, text, basic dimensions, leaders and convex hatches.
+- Move, copy, rotate, scale, mirror, offset, trim, extend, fillet, chamfer, join,
+  break, stretch, array and explode objects. Edit geometry, color, linetype,
+  lineweight and layer in Properties. Changes participate in undo/redo.
+- Click to select; Shift-click adds/removes. Drag left to right for a containing
+  window, or right to left for crossing selection. Hidden/locked objects are excluded.
+- Enter a tool name (`LINE`, `CIRCLE`, etc.), then click or enter `x,y` coordinates,
+  `@dx,dy` relative coordinates, or supported scalar values. Full numeric commands
+  work too: `LINE 0,0 3000,0`, `ROTATE 0,0 90`.
+- Up/Down recalls command history; Tab completes names. Escape cancels a gesture;
+  Return finishes a polyline/spline. ⌘3 toggles history, ⌘5 toggles Properties.
 - Trackpad: two-finger pan, pinch to zoom. Mouse: wheel zoom, Option-drag pan.
-- Layers have visibility and locking. Snap, ortho, polar and grid controls sit in
-  the status bar. Units are explicit; changing units does not rescale geometry.
-- ⌘Z / ⇧⌘Z undo/redo, ⌘A selects editable objects, ⌘0 fits the drawing.
+  ⌘0 fits the drawing. F3 toggles snaps; F8 toggles ortho.
+- ⌘Z / ⇧⌘Z undo/redo; ⌘A selects editable objects; ⌘C/⌘X/⌘V copy/cut/paste
+  MacCAD objects between drawings. Units are explicit; changing units does not rescale.
 
-Save editable work as `.maccad`. Native documents use AppKit coordinated saves,
-autosave and recovery, backed by a versioned Rust document format. **Export DXF**
-produces a DXF R2013 subset; **Export Scaled PDF** creates a single A3 sheet at a
-chosen scale, warning if the drawing will be clipped.
+The question-mark button opens the command reference. See [USAGE.md](USAGE.md)
+for examples and the limits of each editing operation.
 
-## DXF and experimental DWG
+Save editable work as `.maccad`. Version 2 documents retain geometry and properties;
+version 1 documents migrate on opening. AppKit coordinates safe saves and autosave.
+Export DXF produces an explicitly limited R2013 subset. Export Scaled PDF offers
+A4–A0, Letter, Legal and Tabloid, orientation, exact scale or Fit, drawing colors or
+monochrome, and optional selection-only output with plotted lineweights.
 
-DXF import opens a new native drawing and displays an import report. Supported
-geometry includes planar lines, circles, arcs, zero-width lightweight polylines
-with bulges, basic text, and static uniformly scaled block inserts. Other data may
-be omitted or simplified; inspect the report and compare with the original.
+## DXF and DWG
 
-Experimental DWG import uses the open-source LibreDWG `dwg2dxf` helper from
-`/opt/homebrew/bin` or `/usr/local/bin`. Install LibreDWG separately to enable it:
+Open a DXF or DWG to import into a new native document. Review the import report:
+unsupported objects and styling are omitted or simplified, and the original source
+is never overwritten by native saves. Compare the result against the original.
+
+The DMG **includes LibreDWG 0.14**; a separate Homebrew install is unnecessary.
+DWG conversion runs in a separate process with a timeout and visible diagnostics,
+then uses the same DXF subset importer. Smoke checks exercise upstream LibreDWG
+line fixtures from DWG 2000, 2013 and 2018; this does not qualify arbitrary drawings.
+**DWG export is not implemented.** There is no lossless exchange or plugin claim.
+
+## Build and run
+
+Requires Apple Silicon, macOS 14+, matching Xcode Command Line Tools, Rust stable,
+Python 3 and `pkgconf` (`brew install pkgconf`). Network is needed for first fetch.
+Full Xcode is useful for profiling/notarization but not required to build.
 
 ```sh
-brew install libredwg
+make run       # build and open build/MacCAD.app
+make check     # formatting, clippy, core tests, bridge, bundle and app checks
+make dmg       # package build/MacCAD.dmg
+make bench     # 10k/100k entity CPU benchmarks (not GPU frame rates)
 ```
 
-The helper is optional and is not bundled in the initial app. Conversion runs in
-a separate process with a timeout and imports the resulting DXF subset. **DWG
-saving is not implemented.** Imported DWG/DXF source files are never native save
-destinations. There is no claim of lossless exchange or AutoCAD plugin support.
+The first build compiles LibreDWG and Swift system modules and can take several
+minutes. Sources and caches stay inside the checkout. The GPL corresponding-source
+release archive includes locked Rust dependencies and the LibreDWG source tarball.
 
 ## Direct distribution
 
-MacCAD follows [Trav](https://github.com/ckakkar/trav)'s GitHub distribution model:
-an app in a DMG, an Applications shortcut, and signed in-app updates. It is **not
-an App Store app**. The configured stable asset name is `MacCAD.dmg` in
-[GitHub Releases](https://github.com/ckakkar/mac-cad/releases). No release is
-published by local builds.
-
-CI checks pull requests and pushes to `main`. After successful CI, the release
-workflow builds the exact tested commit, publishes the DMG, a signed Sparkle
-update feed/archive, checksums, and corresponding source including locked Rust
-dependencies. Publishing first requires the app's own update signing keys; see
-[CONTRIBUTING.md](CONTRIBUTING.md). Local builds work without those secrets and
-clearly indicate that the updater is unconfigured.
-
-Without optional Apple Developer ID signing/notarization, downloads may require
-**Open Anyway** in System Settings → Privacy & Security on first launch.
+MacCAD follows [Trav](https://github.com/ckakkar/trav)'s GitHub DMG distribution
+model, with signed Sparkle updates, version-specific update archives, checksums and
+corresponding source. It is not a Mac App Store app. CI checks pushes and pull
+requests. Release signing currently uses the owner's **local Keychain**; the private
+key is not stored in GitHub. Cloud publishing is opt-in and disabled by default.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for release instructions.
 
 ## Architecture and roadmap
 
-`crates/cad-core` owns the document, double-precision geometry, commands,
-transaction history, spatial index, and format adapters. `native/MacCAD` contains
-the native document app and Metal canvas. A serial document queue and the C ABI in
-`native/CCadCore` keep ownership explicit. Scene geometry crosses the bridge in
-binary batches; the GPU receives camera-relative floats.
+`crates/cad-core` owns documents, commands, history, geometry, spatial indexing and
+exchange. `native/MacCAD` owns the native UI and Metal renderer. A serial document
+queue and the C ABI in `native/CCadCore` transfer immutable geometry batches; GPU
+coordinates are camera-relative floats while model geometry remains double precision.
 
-Next milestones: representative drawing qualification, richer editing/snapping,
-reference drawings, layouts/viewports, annotation and plotting fidelity, verified
-DWG writing, scripting, and 3D. Full AutoCAD-for-Mac parity remains the long-term
-goal. [AGENTS.md](AGENTS.md) records project decisions and implementation rules.
+Next: professional drawing qualification, layouts/viewports, references, associative
+annotations, richer hatches/fonts, verified DWG writing and scripting. Full AutoCAD
+for Mac parity remains a long-term goal. GPU frame rates on baseline M1 and actual
+force-quit recovery still need qualification. [AGENTS.md](AGENTS.md) records decisions.
 
 ## License
 
-[GPL-3.0-or-later](LICENSE). Third-party license texts are included in built apps.
-The DXF adapter uses [dxf-rs](https://github.com/ixmilia/dxf-rs), optional DWG
-conversion uses [LibreDWG](https://www.gnu.org/software/libredwg/), and updates use
-[Sparkle](https://sparkle-project.org/).
+[GPL-3.0-or-later](LICENSE). Built apps include dependency license texts. DXF uses
+[dxf-rs](https://github.com/ixmilia/dxf-rs), DWG import uses
+[LibreDWG](https://www.gnu.org/software/libredwg/), and updates use
+[Sparkle](https://sparkle-project.org/). MacCAD is an independent project and is not
+affiliated with Autodesk. AutoCAD and DWG are Autodesk trademarks.

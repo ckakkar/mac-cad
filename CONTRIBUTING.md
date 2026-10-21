@@ -1,74 +1,81 @@
 # Contributing
 
-Read [AGENTS.md](AGENTS.md) for product and architecture decisions. Use Apple
-Silicon and macOS 14+; install matching Xcode Command Line Tools and Rust stable.
-Dependencies are pinned in Cargo.lock and Package.resolved.
+Read [AGENTS.md](AGENTS.md). Build on Apple Silicon, macOS 14+, with matching Xcode
+Command Line Tools, Rust stable, Python 3 and `pkgconf` (`brew install pkgconf`).
+Cargo.lock, Package.resolved and the LibreDWG tarball checksum pin dependencies.
 
-Run `make check` before a change is ready. It checks Rust formatting, clippy,
-geometry/command/exchange/ABI tests, a release app build, the actual Swift-to-Rust
-bridge, bundle metadata/signing/linkage, and an app integration smoke check. The
-latter compiles Metal shaders and exercises NSDocument, recovery payloads and PDF
-output. It needs a logged-in graphical macOS session with Metal available.
+Run `make check`: formatting, clippy, geometry/editing/exchange/ABI tests, release
+app build, Swift/C/Rust bridge, bundle architecture/signature/linkage/notices, and
+an app integration check. The latter needs a graphical macOS session and Metal.
+It exercises NSDocument safe saves/reopen, recovery payloads, scene buffers, the
+Metal pipeline, PDF and bundled DWG imports using upstream 2000/2013/2018 fixtures.
 
-Test UI changes in the actual app: toolbar and numeric input, cancellation,
-selection, undo/redo, save/reopen, layer visibility/locking, dark/light appearance,
-and scaled PDF output. Native and DXF fixtures must be generated or redistributable.
-Record known interoperability gaps in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
-and user-facing changes in [CHANGELOG.md](CHANGELOG.md).
+Test UI changes in the actual app: gestures/numeric input, cancellation, selection,
+undo/redo, multiple windows, layer/property edits, both appearances and PDF output.
+Fixtures must be generated or redistributable. Record limitations in
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) and changes in [CHANGELOG.md](CHANGELOG.md).
+`make bench` measures CPU work and segment-buffer size, not GPU frame rate or total
+memory. Qualify performance on baseline M1 before making the 100k/60-fps claim.
 
-`make bench` reports CPU scene/index/pick timings and segment buffer size; it does
-not measure frame rate or total memory. Qualify GPU performance with Instruments
-on baseline M1 before claiming the 100k-entity/60-fps target.
+## Local GitHub releases
 
-## GitHub releases
+The owner chose to keep the private update-signing key **local**. CI still runs on
+pull requests and pushes. Cloud publishing is disabled unless repository variable
+`MACCAD_CLOUD_RELEASES` is explicitly set to `true` and separately authorized signing
+credentials are configured. Do not transfer the local key to GitHub by default.
 
-Releases follow Trav's direct-download model, using a native Swift app and
-Sparkle instead of Tauri. Every successful CI push to `main` triggers Release.
-Version numbers are `<VERSION release line>.<commit count>` (for example `0.1.42`);
-the build number is the commit count. Do not rewrite published main history.
-Release verifies the exact tested SHA again and refuses to publish an older,
-superseded commit or replace an existing version.
+Version is `<VERSION release line>.<commit count>`; build number is the commit
+count. Publish only a clean committed, tested main SHA; do not rewrite published
+history or replace released artifacts. The bundle records its source revision.
 
-Assets: `MacCAD.dmg`, `MacCAD.app.zip`, `appcast.xml`, `SHA256SUMS`, and
-`MacCAD-source.tar.gz` with the app sources, locked Rust dependencies, and an offline
-Cargo source configuration. The appcast downloads a version-specific archive over
-HTTPS, so publishing a later release cannot change an already advertised update.
+The existing MacCAD Sparkle key lives in macOS Keychain under account
+`xyz.ckakkar.maccad`. Its public half is tracked in `config/SparklePublicKey` and
+embedded in all builds. Release tools use the account directly without exporting
+the private key. Keep a secure owner-controlled backup; losing this key prevents
+signing updates trusted by installed builds. Never read or reuse Trav's keys.
 
-### One-time update key configuration
-
-Generate **new MacCAD keys**, not Trav keys. After `make build`, Sparkle's tools
-are in `.build/artifacts/sparkle/Sparkle/bin`:
+After committing the release changes:
 
 ```sh
-.build/artifacts/sparkle/Sparkle/bin/generate_keys
-.build/artifacts/sparkle/Sparkle/bin/generate_keys -x /private/tmp/maccad-updater.key
+export VERSION="$(cat VERSION).$(git rev-list --count HEAD)"
+export BUILD_NUMBER="$(git rev-list --count HEAD)"
+export GITHUB_REPOSITORY=ckakkar/mac-cad
+make check
+make dmg
+RELEASE_NOTES_FILE=docs/RELEASE_NOTES.md bash scripts/release-assets.sh
 ```
 
-Keep the private key securely backed up. Set repository **variable**
-`SPARKLE_PUBLIC_KEY` to the printed base64 public key; set repository **secret**
-`SPARKLE_PRIVATE_KEY` to the exported private key file's contents, then remove the
-temporary export. Do not commit either a private key or a sample public key.
-Release fails explicitly if the configuration is absent. Local builds omit the
-update key and do not attempt to install unsigned updates. To build locally with
-the real public key, set `SPARKLE_PUBLIC_KEY` in the build environment.
+The final command needs GitHub CLI authentication and access to the local Keychain.
+It generates `build/release/` with `MacCAD.dmg`, `MacCAD.app.zip`, `appcast.xml`,
+`SHA256SUMS` and `MacCAD-source.tar.gz`. The source archive contains the exact Git
+revision, vendored locked Rust dependencies, offline Cargo configuration and the
+original LibreDWG source tarball. Sparkle stays pinned by Package.resolved.
 
-Sparkle 2.10 signs the archive, appcast and embedded notes. The app requires signed
-feeds and archive verification before extraction. It prompts before installing an
-update. Private keys never appear in command-line arguments or build logs.
+Inspect checksums, versions, source archive and signed feed, then publish the exact
+SHA using `gh release create` with `--target` and `--notes-file`. Verify the uploaded
+asset hashes and mount the DMG to inspect its app and Applications shortcut.
+Updates use a version-specific HTTPS zip URL; later releases cannot replace the
+archive already advertised in an installed feed.
 
-### Optional Apple signing
+Sparkle 2.10 signs the update archive, feed and embedded notes. The app requires
+signed feeds and archive verification before extraction, and prompts before
+installation. In a separately authorized cloud setup the script accepts
+`SPARKLE_PRIVATE_KEY` via environment/stdin; never put keys in CLI arguments/logs.
+Do not regenerate/replace `config/SparklePublicKey` for routine releases.
 
-GitHub secrets: `APPLE_CERTIFICATE` (base64 PKCS#12),
-`APPLE_CERTIFICATE_PASSWORD`, and `APPLE_SIGNING_IDENTITY`. The workflow imports
-the certificate into a temporary keychain and signs nested Sparkle components,
-the framework and the app. For notarization add `APPLE_ID`, `APPLE_PASSWORD`
-(app-specific) and `APPLE_TEAM_ID`. The release DMG is submitted and stapled.
+## Apple signing and notarization
 
-Without these, the app is ad-hoc signed; documentation must not describe it as
-notarized. Code signing and Sparkle update signing serve different purposes.
-No Apple Developer account, App Store provisioning, or release key is needed for
-`make run` / `make dmg`.
+Local `make run` / `make dmg` needs no Apple Developer account or private signing
+key. Default bundles are ad-hoc signed and **not notarized**. Downloads may need
+Open Anyway in System Settings → Privacy & Security on first launch.
 
-The release workflow is configured but is not exercised by a local `make check`.
-Validate the first actual GitHub release, signed feed, download, install and
-relaunch on a second Mac before advertising unattended update reliability.
+Set `APPLE_SIGNING_IDENTITY` for Developer ID signing. The optional cloud workflow
+supports secrets `APPLE_CERTIFICATE` (base64 PKCS#12),
+`APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, and for notarization
+`APPLE_ID`, `APPLE_PASSWORD` (app-specific), `APPLE_TEAM_ID`. It uses a temporary
+keychain and submits/staples the DMG. Sparkle signatures and Apple code signing
+serve different purposes.
+
+Local tests do not establish a successful remote update installation. Test signed
+updates and relaunch on a second Mac, Gatekeeper first launch, and any optional
+notarization before claiming those paths are qualified.

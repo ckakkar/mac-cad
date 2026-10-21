@@ -1,13 +1,38 @@
 # Changelog
 
-## Unreleased
+## 0.2 — Drafting preview
 
-- Establish the native Apple Silicon macOS app, Rust document engine and C bridge.
-- Add 2D drafting, numeric commands, selection, transforms, undo/redo, layers,
-  static blocks, basic dimensions/hatches, units, and drawing aids.
-- Add versioned native documents, DXF subset exchange, experimental external
-  LibreDWG import, and single-sheet scaled PDF output.
-- Add a Metal canvas with camera-relative GPU coordinates and indexed culling.
-- Configure GitHub DMG releases and signed Sparkle updates following Trav's
-  distribution approach, plus source archives, build checks and benchmarks.
-- Document compatibility limits, contributor workflow and agent instructions.
+- Rework the workspace around grouped tools, native Draw/Dimension/Modify menus,
+  editable properties, searchable layers and command history/completion.
+- Add ellipses, rational control-point splines, points, polygons, three-point arcs,
+  multiline text, radial/diameter dimensions and simple leaders.
+- Add fillet/chamfer for lines, rectangular/polar arrays, connected polyline join,
+  line break, vertex stretch, reverse/open/close, expanded offsets and cleanup.
+- Add window/crossing selection, cross-document clipboard, geometry/style edits,
+  layer colors/linetypes/weights and screen/plot lineweight rendering.
+- Add analytic line/circle/arc intersections and base-relative perpendicular/tangent
+  snaps; correct arc endpoints/quadrants and expand curve snap coverage.
+- Add single-sheet PDF paper/orientation, Fit/exact scale, color/monochrome and
+  selection-only plotting; remove selection highlights from plot output.
+- Expand DXF with ellipse/spline/point, legacy polylines, simplified MTEXT and basic
+  dimensions. Avoid duplicate layer 0, tolerate preview thumbnails and unsigned
+  color metadata, and retain explicit loss reports.
+- Bundle a pinned, statically linked LibreDWG 0.14 import helper and its source and
+  licenses; exercise upstream DWG 2000/2013/2018 line fixtures.
+- Migrate native version 1 to version 2 with default entity/layer properties; bound
+  compact block expansion and avoid worker-queue destruction deadlocks.
+- Configure the real MacCAD Sparkle public key, local Keychain release signing,
+  source-revision metadata, corresponding-source archives and signed GitHub assets.
+  Cloud publication remains disabled while the private key stays local.
+- Verify 30 core tests plus native bridge, bundle, document/Metal/PDF/DWG integration.
+
+This remains a limited 2D preview. DWG export, layouts/viewports, xrefs/images,
+associative annotations, complex hatches and full AutoCAD parity are not delivered.
+
+## 0.1 — Foundation
+
+- Establish the Swift/AppKit/SwiftUI Apple Silicon app, Metal canvas, Rust engine,
+  C bridge, safe native saves, command history, index and undo/redo.
+- Add basic drawing/transforms, layers, static blocks, dimensions, convex hatches,
+  DXF subset exchange, external DWG conversion and scaled A3 PDF output.
+- Add CI, DMG/update packaging, benchmarks, GPL licensing and project instructions.

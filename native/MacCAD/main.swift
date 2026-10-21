@@ -42,8 +42,13 @@ import Sparkle
         file.addItem(.separator());item(file,"Export DXF…",#selector(DrawingDocument.exportDXF(_:)));item(file,"Export Scaled PDF…",#selector(DrawingDocument.exportPDF(_:)),"p")
         let edit = group("Edit")
         item(edit,"Undo",#selector(DrawingDocument.undoCommand(_:)),"z");item(edit,"Redo",#selector(DrawingDocument.redoCommand(_:)),"z",nil,true)
-        edit.addItem(.separator());item(edit,"Cut",#selector(NSText.cut(_:)),"x");item(edit,"Copy",#selector(NSText.copy(_:)),"c");item(edit,"Paste",#selector(NSText.paste(_:)),"v");item(edit,"Select All Objects",#selector(DrawingDocument.selectAllObjects(_:)),"a");item(edit,"Erase Objects",#selector(DrawingDocument.eraseObjects(_:)))
-        let view = group("View");item(view,"Zoom to Drawing",#selector(DrawingDocument.zoomExtents(_:)),"0");item(view,"Enter Full Screen",#selector(NSWindow.toggleFullScreen(_:)),"f",nil,true)
+        edit.addItem(.separator());item(edit,"Cut",#selector(NSText.cut(_:)),"x");item(edit,"Copy",#selector(NSText.copy(_:)),"c");item(edit,"Paste",#selector(NSText.paste(_:)),"v");item(edit,"Select All",#selector(NSText.selectAll(_:)),"a");item(edit,"Erase Objects",#selector(DrawingDocument.eraseObjects(_:)))
+        let view = group("View");item(view,"Zoom to Drawing",#selector(DrawingDocument.zoomExtents(_:)),"0");item(view,"Command History",#selector(DrawingDocument.toggleCommandHistory(_:)),"3");item(view,"Properties Inspector",#selector(DrawingDocument.toggleProperties(_:)),"5");item(view,"Ortho Mode",#selector(DrawingDocument.toggleOrtho(_:)),"l");item(view,"Enter Full Screen",#selector(NSWindow.toggleFullScreen(_:)),"f",nil,true)
+        func tools(_ title:String,_ values:[Tool]){let m = group(title);for tool in values{let i = NSMenuItem(title:tool.title,action:#selector(DrawingDocument.startTool(_:)),keyEquivalent:"");i.representedObject = tool.rawValue;m.addItem(i)}}
+        tools("Draw",[.line,.polyline,.rectangle,.polygon,.circle,.arc,.ellipse,.spline,.point,.text,.hatch])
+        tools("Dimension",[.dimension,.radius,.leader,.measure])
+        tools("Modify",[.move,.copy,.rotate,.scale,.mirror,.offset,.trim,.extend,.fillet,.chamfer])
+        if let m = main.items.first(where:{$0.title == "Modify"})?.submenu{m.addItem(.separator());for command in ["JOIN","EXPLODE","REVERSE","CLOSE","SELECTSIMILAR","OVERKILL","PURGE"]{let i = NSMenuItem(title:command.capitalized,action:#selector(DrawingDocument.runCADCommand(_:)),keyEquivalent:"");i.representedObject = command;m.addItem(i)}}
         let window = group("Window");item(window,"Minimize",#selector(NSWindow.performMiniaturize(_:)),"m");item(window,"Zoom",#selector(NSWindow.performZoom(_:)));NSApp.windowsMenu = window
         let help = group("Help");item(help,"MacCAD on GitHub",#selector(self.help(_:)),"",self);NSApp.helpMenu = help
         NSApp.mainMenu = main

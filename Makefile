@@ -8,7 +8,11 @@ help: ## List tasks
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 build: ## Build the Apple Silicon MacCAD.app bundle
+	bash scripts/build-libredwg.sh
 	cargo build --release --locked -p cad-core --lib
+	# SwiftPM does not track the Rust archive supplied by linker flags.
+	# Remove its link output so incremental builds include the current engine.
+	rm -f .build/arm64-apple-macosx/release/MacCAD
 	$(SWIFT) -c release --arch arm64
 	bash scripts/bundle.sh
 
