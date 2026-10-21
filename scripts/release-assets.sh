@@ -32,7 +32,7 @@ cp build/update-feed/MacCAD.app.zip build/update-feed/appcast.xml build/release/
 # GPL corresponding source includes the exact locked Rust dependency sources,
 # rather than relying on a future crates.io download to rebuild this release.
 git archive HEAD | tar -x -C build/corresponding-source
-cargo vendor --locked build/corresponding-source/vendor > build/corresponding-source/.cargo/config.toml
+(cd build/corresponding-source && cargo vendor --locked vendor > .cargo/config.toml)
 mkdir -p build/corresponding-source/third_party
 cp .build/libredwg-0.14.tar.gz build/corresponding-source/third_party/
 tar -czf build/release/MacCAD-source.tar.gz -C build/corresponding-source .
