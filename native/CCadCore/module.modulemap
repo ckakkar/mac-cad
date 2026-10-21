@@ -1,0 +1,4 @@
+module CCadCore {
+    header "include/cad_core.h"
+    export *
+}

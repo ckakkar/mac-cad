@@ -1,0 +1,92 @@
+name: Release
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  mac:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: macos-26
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Release version and prerequisites
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          test -n "$SPARKLE_PUBLIC_KEY" || { echo 'Set repository variable SPARKLE_PUBLIC_KEY; see CONTRIBUTING.md.'; exit 1; }
+          test -n "$SPARKLE_PRIVATE_KEY" || { echo 'Set repository secret SPARKLE_PRIVATE_KEY; see CONTRIBUTING.md.'; exit 1; }
+          version="$(cat VERSION).$(git rev-list --count HEAD)"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo 'Release already exists; refusing to replace its signed artifacts.'
+            exit 1
+          fi
+          # Ignore a completed workflow for a commit superseded by main.
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+      - name: Check the exact release commit
+        run: make check
+      - name: Optional Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            keychain="$RUNNER_TEMP/maccad-signing.keychain-db"
+            password=$(openssl rand -hex 24)
+            security create-keychain -p "$password" "$keychain"
+            security set-keychain-settings -lut 21600 "$keychain"
+            security unlock-keychain -p "$password" "$keychain"
+            printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/developer.p12"
+            security import "$RUNNER_TEMP/developer.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+            security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain" >/dev/null
+            security list-keychains -d user -s "$keychain" login.keychain-db
+            rm "$RUNNER_TEMP/developer.p12"
+            echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
+          fi
+      - name: Package direct download
+        run: make dmg
+      - name: Optional notarization
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$APPLE_ID" ]; then
+            test -n "${APPLE_SIGNING_IDENTITY:-}" || { echo 'Notarization also needs Developer ID signing.'; exit 1; }
+            xcrun notarytool submit build/MacCAD.dmg --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+            xcrun stapler staple build/MacCAD.dmg
+          fi
+      - name: Signed updates and corresponding source
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: bash scripts/release-assets.sh
+      - name: Publish
+        run: |
+          gh release create "v$VERSION" build/release/* --target "$RELEASE_SHA" --title "MacCAD $VERSION" --notes-file build/release-notes.md --latest
+      - name: Remove temporary signing material
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/developer.p12"
+          if [ -f "$RUNNER_TEMP/maccad-signing.keychain-db" ]; then security delete-keychain "$RUNNER_TEMP/maccad-signing.keychain-db"; fi

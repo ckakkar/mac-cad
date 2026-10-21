@@ -1,0 +1,7 @@
+/target/
+/.build/
+/build/
+/.swiftpm/
+.DS_Store
+*.xcuserstate
+*.maccad.recovery
