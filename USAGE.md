@@ -129,6 +129,8 @@ This draws two continuing line segments and closes to the starting point. During
 LINE, PLINE and SPLINE, `U` removes the last segment/point; `C` closes LINE/PLINE.
 Blank input finishes the current path. Escape (also Ctrl-[ / Ctrl-\) cancels the
 unfinished part and clears selection; already committed LINE segments remain.
+LINE Undo refuses to cross an intervening document edit, such as a layer change;
+finish/cancel LINE before undoing those changes.
 
 Start `M`, pick objects or enter `A` (All), confirm selection with Return/Space,
 then enter a base point and a second point. Preselecting objects also works. Click

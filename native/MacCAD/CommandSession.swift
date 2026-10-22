@@ -4,13 +4,14 @@ import Foundation
 struct CommandSession {
     enum Stage { case idle, selection, points, polygonSides, polygonMode, radius, angle, factor, distance, offsetSide, filletRadius, chamferFirst, chamferSecond, textHeight, textRotation, textValue, mirrorDelete, zoom, values, blockName, insertName, insertScale, insertAngle }
     enum Effect {
-        case command(String), add([String:Any]), clearSelection, selectAll, selectLast, selectPrevious
+        case command(String), undoLine(UInt64), add([String:Any]), clearSelection, selectAll, selectLast, selectPrevious
         case fit, zoom(Double), zoomWindow(CADBounds), previousView, measure(CADPoint,CADPoint)
     }
     var tool: Tool = .select
     var stage: Stage = .idle
     var name = ""
     var points: [CADPoint] = []
+    var lineRevisions:[UInt64] = []
     var defaults = Defaults()
     struct Defaults {
         var radius = 100.0, distance = 100.0, fillet = 0.0, chamferA = 100.0, chamferB = 100.0
@@ -70,7 +71,7 @@ struct CommandSession {
             }
         }
     }
-    mutating func reset() { tool = .select; stage = .idle; name = ""; points = [];parameters = [] }
+    mutating func reset() { tool = .select; stage = .idle; name = ""; points = [];parameters = [];lineRevisions = [] }
     mutating func start(_ tool:Tool, name:String, selected:Int) -> [Effect] {
         reset(); self.tool = tool; self.name = name
         circlePoints = 0; diameter = false; centerMode = false; circumscribed = false; closed = false
@@ -168,7 +169,11 @@ struct CommandSession {
         }
         if ["U","UNDO"].contains(word),[.line,.polyline,.spline].contains(tool) {
             guard points.count > 1 else {throw CoreError.message("No segment to undo in this command")}
-            points.removeLast(); return tool == .line ? [.command("UNDO")]:[]
+            if tool == .line {
+                guard let revision = lineRevisions.last else {throw CoreError.message("No line segment to undo")}
+                points.removeLast();lineRevisions.removeLast();return [.undoLine(revision)]
+            }
+            points.removeLast();return []
         }
         if ["C","CLOSE"].contains(word),[.line,.polyline].contains(tool) {
             guard points.count >= 3 else {throw CoreError.message("Close needs at least three points")}

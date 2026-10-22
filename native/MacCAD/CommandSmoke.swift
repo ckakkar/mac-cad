@@ -70,6 +70,13 @@ import AppKit
         _ = delegate.control(field,textView:textView,doCommandBy:#selector(NSResponder.insertTab(_:)))
         try require(model.commandText == "CIRCLE","Tab completion must resolve a command")
         let textField = NSTextField();try require(window.fieldEditor(true,for:textField) is CADFieldEditor == false,"Ordinary text fields must retain the standard field editor")
+        let mixed = EditorModel(core:CADCore());await mixed.refresh()
+        for input in ["L","0,0","10,0"]{mixed.execute(input)};await mixed.waitForIdle()
+        mixed.layer("0",values:["color":[1,0,0,1]]);await mixed.waitForIdle()
+        let beforeMixedUndo = try await mixed.core.request(["op":"serialize"])
+        mixed.execute("U");await mixed.waitForIdle()
+        let afterMixedUndo = try await mixed.core.request(["op":"serialize"])
+        try require(NSDictionary(dictionary:beforeMixedUndo).isEqual(to:afterMixedUndo) && mixed.session.points.count == 2,"LINE Undo must not undo an intervening layer edit or consume its pending points")
         let compound = EditorModel(core:CADCore());await compound.refresh()
         func build(_ inputs:[String]) async {for input in inputs{compound.execute(input)};await compound.waitForIdle()}
         await build(["LINE 0,0 10,0","AR","A","","2","3","100","200"])

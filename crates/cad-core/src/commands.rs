@@ -399,6 +399,13 @@ impl Engine {
                 self.command(v["text"].as_str().ok_or("Missing command")?)?;
                 Ok(self.state())
             }
+            "undo_if_revision" => {
+                if v["revision"].as_u64() != Some(self.revision) {
+                    return Err("The drawing changed after that line segment. Finish or cancel LINE before undoing other edits.".into());
+                }
+                self.undo(false)?;
+                Ok(self.state())
+            }
             "add" => {
                 let shapes: Vec<Shape> =
                     serde_json::from_value(v["shapes"].clone()).map_err(|e| e.to_string())?;

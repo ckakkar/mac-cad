@@ -58,6 +58,10 @@ annotation spaces/rotation, polygon, tool interruption, zoom, offset side, array
 blocks/insert, join/explode/break, cancellation, function keys, completion and field
 editor isolation. Core tests independently verify geometry and selection behavior.
 
+LINE Undo is revision-guarded: after an intervening document edit (such as a layer
+change), it asks you to finish/cancel LINE before undoing other changes. It does
+not undo the unrelated edit or consume pending points.
+
 No supported row means every AutoCAD option is implemented. In particular, the
 cursor field currently uses command-line coordinate rules: `x,y` is absolute,
 `@x,y` is relative. It does not silently emulate AutoCAD's separate dynamic pointer

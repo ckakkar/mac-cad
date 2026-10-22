@@ -239,6 +239,8 @@ enum Tool: String, CaseIterable, Identifiable {
             case .command(let text):
                 if !selection.isEmpty {previousSelection = selection}
                 apply(try await core.request(["op":"command","text":text]))
+                if session.tool == .line && text.hasPrefix("LINE ") {session.lineRevisions.append(revision)}
+            case .undoLine(let revision): apply(try await core.request(["op":"undo_if_revision","revision":revision]))
             case .add(let shape): apply(try await core.request(["op":"add","shapes":[shape]]))
             case .clearSelection:
                 if !selection.isEmpty {previousSelection = selection}

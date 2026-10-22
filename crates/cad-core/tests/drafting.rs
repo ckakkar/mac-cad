@@ -461,4 +461,14 @@ fn circle_constructions_offset_side_and_mirror_delete_are_validated() {
     assert!(matches!(e.doc.entities[&4].shape,Shape::Line{a,..} if a.x == -1.0));
     run(&mut e, "UNDO");
     assert!(matches!(e.doc.entities[&4].shape,Shape::Line{a,..} if a.x == 1.0));
+    let before_guard = e.doc.clone();
+    let revision = e.revision;
+    assert!(e
+        .dispatch(json!({"op":"undo_if_revision","revision":revision+1}))
+        .is_err());
+    assert_eq!(e.doc, before_guard);
+    assert_eq!(e.revision, revision);
+    e.dispatch(json!({"op":"undo_if_revision","revision":revision}))
+        .unwrap();
+    assert_ne!(e.revision, revision);
 }
