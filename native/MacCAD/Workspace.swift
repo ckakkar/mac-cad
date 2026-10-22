@@ -1,141 +1,234 @@
 import SwiftUI
 import AppKit
 
+/// The drawing area of a document window: model space, command line and status
+/// bar. Tool Sets and the inspector live in the window's split view.
 struct WorkspaceView: View {
-    @ObservedObject var model: EditorModel
+    @Bindable var model: EditorModel
     var body: some View {
-        VStack(spacing:0) {
-            HStack(spacing:14) {
-                icon("New","doc.badge.plus"){NSDocumentController.shared.newDocument(nil)}
-                icon("Open","folder"){NSDocumentController.shared.openDocument(nil)}
-                icon("Save","square.and.arrow.down"){model.document?.save(nil)}
-                Divider().frame(height:22)
-                icon("Undo","arrow.uturn.backward"){model.execute("UNDO")}.disabled(!model.canUndo)
-                icon("Redo","arrow.uturn.forward"){model.execute("REDO")}.disabled(!model.canRedo)
-                Divider().frame(height:22)
-                icon("Export DXF","square.and.arrow.up"){model.document?.exportDXF(nil)}
-                icon("Plot / PDF","printer"){model.document?.exportPDF(nil)}
-                Divider().frame(height:22)
-                Button{model.choose(.select)}label:{Label("Select",systemImage:"cursorarrow")}
-                Menu("Selection") {
-                    Button("Select All"){model.operation(["op":"select_all"])}
-                    Button("Clear Selection"){model.operation(["op":"select","ids":[]])}
-                    Button("Select Similar"){model.runFromMenu("SELECTSIMILAR")}
-                    Button("Measure Selection"){model.measureSelection()}
-                }.fixedSize()
-                Spacer()
-                icon("Zoom extents","arrow.up.left.and.arrow.down.right"){model.fitView?()}
-                icon("Command window","terminal"){model.showCommandLine.toggle()}
-                icon("Properties","sidebar.right"){model.showProperties.toggle()}
-                icon("Command reference","questionmark.circle"){model.showCommandReference = true}
-            }.buttonStyle(.borderless).padding(.horizontal,16).padding(.vertical,10)
-            Divider()
-            HSplitView {
-                if model.showTools {toolSets.frame(minWidth:162,idealWidth:178,maxWidth:220)}
-                VStack(spacing:0) {
-                    HStack{Image(systemName:"doc.text").foregroundStyle(.secondary);Text(model.drawingTitle).font(.system(size:11,weight:.medium)).lineLimit(1);Spacer();Text("MODEL SPACE").font(.system(size:9,weight:.medium)).tracking(1).foregroundStyle(.secondary)}.padding(.horizontal,12).padding(.vertical,7).background(.bar)
-                    ZStack(alignment:.topLeading) {
-                        CanvasHost(model:model)
-                        Text("[Top]  [2D Wireframe]").font(.system(size:11)).foregroundStyle(.white.opacity(0.65)).padding(12).allowsHitTesting(false)
-                    }.frame(minWidth:450,minHeight:350)
-                    if model.showCommandLine {commandArea}
+        VStack(spacing: 0) {
+            ZStack(alignment: .topLeading) {
+                CanvasHost(model: model)
+                ViewportControls(model: model).padding(8)
+                if model.entityCount == 0 && !model.session.active { EmptyDrawingHint(model: model) }
+            }
+            .frame(minWidth: 420, minHeight: 300)
+            // Expanded history and autocomplete float over model space, so the canvas never jumps.
+            .overlay(alignment: .bottomLeading) {
+                if model.showCommandLine {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if model.showCommandHistory { HistoryList(model: model, lines: 300).frame(height: 220).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8)) }
+                        if !model.suggestions.isEmpty { SuggestionList(model: model).frame(maxWidth: 460) }
+                    }
+                    .padding(8)
                 }
-                if model.showProperties || model.showLayers {InspectorView(model:model).frame(minWidth:245,idealWidth:280,maxWidth:360)}
             }
-            Divider()
-            if model.showStatus {HStack(spacing:12) {
-                Text("Model").font(.system(size:10,weight:.semibold)).padding(.horizontal,12).padding(.vertical,4).background(Color.accentColor.opacity(0.12),in:RoundedRectangle(cornerRadius:3))
-                Text(model.message).lineLimit(1).truncationMode(.middle);Spacer(minLength:4)
-                Text(String(format:"%.2f, %.2f",model.coordinate.x,model.coordinate.y)).monospacedDigit().frame(minWidth:120,alignment:.trailing);Text(model.units).foregroundStyle(.tertiary)
-                toggle("Grid",$model.grid);toggle("Snap",$model.snapping);toggle("Ortho",$model.ortho);toggle("Polar",$model.polar);toggle("LWT",$model.lineWeights);toggle("DYN",$model.dynamicInput);toggle("GSNAP",$model.gridSnap)
-            }.font(.system(size:10)).foregroundStyle(.secondary).padding(.horizontal,10).padding(.vertical,5)}
-        }.background(Color(nsColor:.windowBackgroundColor))
-        .onChange(of:model.grid){model.invalidate?()}.onChange(of:model.lineWeights){model.invalidate?()}.onChange(of:model.dynamicInput){model.invalidate?()}
-        .onChange(of:model.ortho){if model.ortho{model.polar = false};model.invalidate?()}
-        .onChange(of:model.polar){if model.polar{model.ortho = false};model.invalidate?()}
-        .task{await model.refresh()}
-        .alert("Drawing command",isPresented:Binding(get:{model.errorMessage != nil},set:{if !$0{model.errorMessage = nil}})){Button("OK"){model.errorMessage = nil}}message:{Text(model.errorMessage ?? "")}
-        .sheet(isPresented:$model.showCommandReference){CommandReference(model:model)}
-    }
-    private var toolSets:some View {
-        ScrollView{VStack(alignment:.leading,spacing:16){
-            Text("TOOL SETS").font(.system(size:10,weight:.semibold)).foregroundStyle(.secondary)
-            toolGroup("Draw",[.line,.polyline,.rectangle,.polygon,.circle,.arc,.ellipse,.spline,.point])
-            toolGroup("Modify",[.move,.copy,.rotate,.scale,.mirror,.offset,.trim,.extend,.fillet,.chamfer])
-            LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:4){
-                action("Join","point.3.connected.trianglepath.dotted"){model.choose(.join)}
-                action("Break","scissors"){model.choose(.breakLine)}
-                action("Array","square.grid.3x3"){model.choose(.arrayRect)}
-                action("Polar Array","circle.grid.3x3"){model.choose(.arrayPolar)}
-                action("Explode","square.stack.3d.up.slash"){model.choose(.explode)}
-                action("Erase","trash"){model.choose(.erase)}
-            }
-            toolGroup("Annotate",[.text,.dimension,.alignedDimension,.radius,.diameter,.leader,.hatch,.measure])
-            VStack(alignment:.leading,spacing:7){Text("BLOCKS").font(.system(size:10,weight:.semibold)).foregroundStyle(.secondary)
-                Button("Create from selection…"){model.choose(.block)}
-                Menu("Insert Block"){ForEach(model.blocks,id:\.self){name in Button(name){model.execute("INSERT");model.execute(name)}}}.disabled(model.blocks.isEmpty)
-            }.font(.system(size:11))
-            if model.entityCount == 0 {Button("Open example plan"){model.demo()}.font(.caption).buttonStyle(.link)}
-        }.padding(12)}
-    }
-    private func toolGroup(_ title:String,_ tools:[Tool])->some View {
-        VStack(alignment:.leading,spacing:7){Text(title.uppercased()).font(.system(size:10,weight:.semibold)).foregroundStyle(.secondary)
-            LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:4){ForEach(tools){tool in
-                Button{model.choose(tool)}label:{VStack(spacing:5){Image(systemName:tool.symbol).font(.system(size:15)).frame(height:18);Text(tool.title).font(.system(size:9)).lineLimit(1)}.frame(maxWidth:.infinity).padding(.vertical,8)}.buttonStyle(.plain).background(model.tool == tool ? Color.accentColor.opacity(0.16):Color.primary.opacity(0.025),in:RoundedRectangle(cornerRadius:5)).help(tool.prompt).accessibilityLabel(tool.title)
-            }}
+            .accessibilityElement(children: .contain)
+            if model.showCommandLine { CommandLineView(model: model) }
+            if model.showStatus { StatusBar(model: model) }
         }
+        .onChange(of: model.grid) { model.invalidate?() }
+        .onChange(of: model.lineWeights) { model.invalidate?() }
+        .onChange(of: model.gridSnap) { model.invalidate?() }
+        .onChange(of: model.dynamicInput) { model.invalidate?() }
+        .task { await model.refresh() }
+        .sheet(isPresented: $model.showCommandReference) { CommandReference(model: model) }
+        .sheet(isPresented: $model.showDraftingSettings) { DraftingSettingsSheet(model: model) }
+        .sheet(isPresented: $model.showUnits) { UnitsSheet(model: model) }
     }
-    private func action(_ title:String,_ symbol:String,_ action:@escaping()->Void)->some View{Button(action:action){VStack(spacing:5){Image(systemName:symbol).font(.system(size:14)).frame(height:18);Text(title).font(.system(size:9))}.frame(maxWidth:.infinity).padding(.vertical,8)}.buttonStyle(.plain).background(Color.primary.opacity(0.025),in:RoundedRectangle(cornerRadius:5)).accessibilityLabel(title)}
-    private var commandArea:some View {
-        VStack(alignment:.leading,spacing:0){Divider()
-            if model.showCommandHistory {
-                ScrollViewReader{proxy in ScrollView{VStack(alignment:.leading,spacing:3){ForEach(Array(model.commandHistory.enumerated()),id:\.offset){i,text in Text(text).font(.system(size:10,design:.monospaced)).foregroundStyle(.secondary).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading).id(i)}}.padding(.horizontal,12).padding(.vertical,6)}.frame(height:68).onChange(of:model.commandHistory.count){proxy.scrollTo(model.commandHistory.count-1,anchor:.bottom)}}
-            }
-            HStack(spacing:8){Text("Command:").font(.system(size:11,weight:.medium));CommandInput(model:model).frame(height:24);Text(model.tool.title).font(.caption).foregroundStyle(.secondary)}.padding(.horizontal,12).padding(.vertical,5)
-            Text(model.tool == .select ? "Return/Space accepts  ·  Escape cancels  ·  Shift removes from selection":model.message).font(.system(size:9)).foregroundStyle(.tertiary).padding(.horizontal,12).padding(.bottom,5)
-        }.background(.bar)
-    }
-    private func toggle(_ title:String,_ value:Binding<Bool>)->some View{Button{value.wrappedValue.toggle()}label:{Text(title.uppercased()).font(.system(size:9,weight:.medium)).foregroundStyle(value.wrappedValue ? Color.accentColor:.secondary)}.buttonStyle(.plain)}
-    private func icon(_ title:String,_ symbol:String,_ action:@escaping()->Void)->some View{Button(action:action){Image(systemName:symbol).frame(width:18)}.help(title).accessibilityLabel(title)}
 }
 
-struct CommandReference:View {
-    @ObservedObject var model:EditorModel
-    var body:some View{VStack(alignment:.leading,spacing:14){Text("2D command reference").font(.title2.weight(.semibold));Text("Space/Return accepts prompts and repeats the last command when idle. Select before a modify tool or after invoking it. x,y is absolute; @x,y and @distance<angle are relative. Angles are degrees. Annotation spaces remain text.").foregroundStyle(.secondary)
-        ScrollView{Text("""
-        LINE 0,0 3000,0          RECT 0,0 8000,6000
-        PLINE 0,0 1000,0:0.414214 1000,1000 close
-        CIRCLE 4000,3000 600     ARC 0,0 1000 0 90
-        ARC3 0,0 500,500 1000,0
-        ELLIPSE 0,0 2000,0 0.5
-        SPLINE 0,0 1000,2000 2000,2000 3000,0
-        POLYGON 6 0,0 1000      POINT 0,0
-        TEXT 1000,1000 150 Living room
-        MTEXT 0,0 150 First line\\PSecond line
-        DIM 0,0 8000,0 -500     DIMALIGNED 0,0 1000,1000 200
-        DIMRADIUS 0,0 1000,0 1400,400
-        LEADER 0,0 500,500 150 Note
-        HATCH diagonal 100 0,0 2000,0 2000,1000 0,1000
+/// AutoCAD's viewport control: the [–] menu holds view commands for this viewport.
+private struct ViewportControls: View {
+    @Bindable var model: EditorModel
+    @Bindable var settings = AppSettings.shared
+    var body: some View {
+        HStack(spacing: 2) {
+            Menu {
+                Button("Zoom Extents") { model.fitView?() }
+                Button("Zoom Window") { model.runFromMenu("ZOOM W") }
+                Button("Zoom Previous") { model.previousView?() }
+                Divider()
+                Button("Regenerate") { model.invalidate?() }
+                Divider()
+                Toggle("Grid", isOn: $model.grid)
+                Toggle("UCS Icon", isOn: $settings.showUCSIcon)
+                Picker("Background", selection: $settings.background) { ForEach(AppSettings.Background.allCases) { Text($0.title).tag($0) } }
+            } label: { Text("[–]") }
+            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+            .help("Viewport controls")
+            Text("[Top]  [2D Wireframe]")
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(settings.background == .dark ? Color.white.opacity(0.7) : Color.black.opacity(0.6))
+        .accessibilityLabel("Viewport controls")
+    }
+}
 
-        MOVE 500,0              COPY 1000,0
-        ROTATE 0,0 90           SCALE 0,0 2
-        MIRROR 0,0 0,1000       OFFSET 200
-        TRIM 0,0 0,1000 -100,0
-        EXTEND 0,0 0,1000 -100,0
-        FILLET 200              CHAMFER 100 200
-        ARRAYRECT 2 3 1000 1000
-        ARRAYPOLAR 0,0 6 360
-        JOIN / BREAK 500,0 / REVERSE / CLOSE / OPEN
-        STRETCH 0,0 1000,1000 100,0
-        BLOCK door 0,0          INSERT door 2000,0 1 90
-        EXPLODE / ERASE / UNDO / REDO
-        CHPROP layer Walls     CHPROP color #FF8800
-        CHPROP linetype Dashed  CHPROP lineweight 0.5
-        MATCHPROP 1            SELECTSIMILAR
-        LAYISO / LAYUNISO / LAYON / LAYOFF / LAYLOCK / LAYUNLOCK
-        OVERKILL / PURGE        AREA / LIST
-        UNITS mm               ZOOM EXTENTS
-        """).font(.system(size:11,design:.monospaced)).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)}
-        Button("Done"){model.showCommandReference = false}.keyboardShortcut(.defaultAction).frame(maxWidth:.infinity,alignment:.trailing)
-    }.padding(24).frame(width:670,height:700)}
+private struct EmptyDrawingHint: View {
+    let model: EditorModel
+    var body: some View {
+        VStack(spacing: 6) {
+            Text("Type a command, choose a tool, or").foregroundStyle(.secondary)
+            Button("Open the Example Floor Plan") { model.demo() }.buttonStyle(.link)
+        }
+        .font(.callout)
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .padding(.bottom, 28)
+    }
+}
+
+/// AutoCAD-style command line: recent history above the live prompt, whose
+/// bracketed options are clickable, and autocomplete while typing a command.
+struct CommandLineView: View {
+    @Bindable var model: EditorModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Divider()
+            // AutoCAD keeps a few recent lines above the prompt; F2 expands the full history.
+            HistoryList(model: model, lines: 3).frame(height: 46).opacity(model.showCommandHistory ? 0 : 1)
+            Divider().opacity(0.5)
+            HStack(spacing: 6) {
+                Button { model.showCommandHistory.toggle() } label: {
+                    Image(systemName: model.showCommandHistory ? "chevron.down" : "chevron.up").font(.system(size: 9, weight: .semibold))
+                }.buttonStyle(.borderless).help("Expand or collapse command history (F2)")
+                Image(systemName: "chevron.right.2").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                PromptText(model: model)
+                CommandInput(model: model).frame(minWidth: 140).frame(height: 20)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.6))
+        }
+        .background(.bar)
+        .accessibilityElement(children: .contain).accessibilityLabel("Command line")
+    }
+}
+
+private struct HistoryList: View {
+    let model: EditorModel
+    let lines: Int
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(model.commandHistory.suffix(lines)) { line in
+                        Text(line.text)
+                            .foregroundStyle(line.kind == .error ? Color.red : line.kind == .info ? Color.secondary : Color.primary.opacity(0.8))
+                            .frame(maxWidth: .infinity, alignment: .leading).id(line.id)
+                    }
+                }
+                .font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+                .padding(.horizontal, 10).padding(.vertical, 4)
+            }
+            .scrollIndicators(lines > 3 ? .automatic : .never)
+            .onAppear { if let id = model.commandHistory.last?.id { proxy.scrollTo(id, anchor: .bottom) } }
+            .onChange(of: model.commandHistory.last?.id) { if let id = model.commandHistory.last?.id { proxy.scrollTo(id, anchor: .bottom) } }
+        }
+        .accessibilityLabel("Command history")
+    }
+}
+
+private struct PromptText: View {
+    let model: EditorModel
+    var body: some View {
+        let parts = CommandSession.options(in: model.session.prompt)
+        HStack(spacing: 3) {
+            Text(parts.lead.trimmingCharacters(in: .whitespaces)).lineLimit(1)
+            ForEach(parts.options, id: \.self) { option in
+                Button(option) { model.execute(option) }
+                    .buttonStyle(OptionButtonStyle()).help("Choose \(option)")
+            }
+            if !parts.options.isEmpty { Text(parts.tail.trimmingCharacters(in: .whitespaces)).lineLimit(1) }
+        }
+        .font(.system(size: 12, design: .monospaced))
+        .fixedSize()
+        .layoutPriority(1)
+    }
+}
+/// Clickable command option keywords, as in AutoCAD's command line.
+private struct OptionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 4).padding(.vertical, 1)
+            .foregroundStyle(Color.accentColor)
+            .background(Color.accentColor.opacity(configuration.isPressed ? 0.3 : 0.14), in: RoundedRectangle(cornerRadius: 3))
+    }
+}
+
+private struct SuggestionList: View {
+    @Bindable var model: EditorModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(model.suggestions.enumerated()), id: \.element) { index, name in
+                Button { model.commandText = name; model.suggestionIndex = nil; model.submit() } label: {
+                    HStack {
+                        Text(name).font(.system(size: 12, design: .monospaced))
+                        Spacer()
+                        Text(CommandCatalog.entries[name] ?? "").foregroundStyle(.secondary).font(.system(size: 11))
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 3)
+                    .contentShape(Rectangle())
+                    .background(index == model.suggestionIndex ? Color.accentColor.opacity(0.25) : Color.clear)
+                }.buttonStyle(.plain)
+            }
+        }
+        .padding(.vertical, 4)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
+        .shadow(radius: 6, y: 2)
+        .accessibilityLabel("Command suggestions")
+    }
+}
+
+struct CommandReference: View {
+    let model: EditorModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("2D Command Reference").font(.title2.weight(.semibold))
+            Text("Space/Return accepts prompts and repeats the last command when idle. Select before a modify tool or after invoking it. x,y is absolute; @x,y and @distance<angle are relative. Angles are degrees. Annotation spaces remain text. Click a grip to stretch it.").foregroundStyle(.secondary)
+            ScrollView {
+                Text("""
+                LINE 0,0 3000,0          RECT 0,0 8000,6000
+                PLINE 0,0 1000,0:0.414214 1000,1000 close
+                CIRCLE 4000,3000 600     ARC 0,0 1000 0 90
+                ARC3 0,0 500,500 1000,0
+                ELLIPSE 0,0 2000,0 0.5
+                SPLINE 0,0 1000,2000 2000,2000 3000,0
+                POLYGON 6 0,0 1000      POINT 0,0
+                TEXT 1000,1000 150 Living room
+                MTEXT 0,0 150 First line\\PSecond line
+                DIM 0,0 8000,0 -500     DIMALIGNED 0,0 1000,1000 200
+                DIMRADIUS 0,0 1000,0 1400,400
+                LEADER 0,0 500,500 150 Note
+                HATCH diagonal 100 0,0 2000,0 2000,1000 0,1000
+
+                MOVE 500,0              COPY 1000,0
+                ROTATE 0,0 90           SCALE 0,0 2
+                MIRROR 0,0 0,1000       OFFSET 200
+                TRIM 0,0 0,1000 -100,0
+                EXTEND 0,0 0,1000 -100,0
+                FILLET 200              CHAMFER 100 200
+                ARRAYRECT 2 3 1000 1000
+                ARRAYPOLAR 0,0 6 360
+                JOIN / BREAK 500,0 / REVERSE / CLOSE / OPEN
+                STRETCH 0,0 1000,1000 100,0
+                BLOCK door 0,0          INSERT door 2000,0 1 90
+                EXPLODE / ERASE / UNDO / REDO
+                CHPROP layer Walls     CHPROP color #FF8800
+                CHPROP linetype Dashed  CHPROP lineweight 0.5
+                MATCHPROP 1            SELECTSIMILAR
+                LAYISO / LAYUNISO / LAYON / LAYOFF / LAYLOCK / LAYUNLOCK
+                OVERKILL / PURGE        AREA / LIST
+                UNITS mm               ZOOM EXTENTS
+                DSETTINGS              LAYER / PROPERTIES
+                """).font(.system(size: 11, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack {
+                Spacer()
+                Button("Done") { model.showCommandReference = false }.keyboardShortcut(.defaultAction)
+            }
+        }.padding(24).frame(width: 670, height: 700)
+    }
 }

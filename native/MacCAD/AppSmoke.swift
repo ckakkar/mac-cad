@@ -31,10 +31,13 @@ import MetalKit
             guard !scene.segments.isEmpty, !scene.triangles.isEmpty, scene.labels.count == 2 else { throw CoreError.message("Scene data missing after recovery") }
             let view = MTKView(frame:NSRect(x:0,y:0,width:900,height:600))
             let renderer = try MetalDrawing(view:view)
-            renderer.upload(scene,camera:Camera(),size:view.bounds.size,grid:true)
+            renderer.upload(scene,camera:Camera(),size:view.bounds.size,grid:.init(spacing:nil,minor:[0.2,0.2,0.2,1],major:[0.3,0.3,0.3,1],axis:[0.4,0.4,0.4,1]),settings:.shared)
             let pdf = directory.appendingPathComponent("drawing.pdf")
             try PDFPlot.write(scene,bounds:bounds,page:CGRect(x:0,y:0,width:1190,height:842),scale:0.1,url:pdf)
             guard try Data(contentsOf:pdf).starts(with:Data("%PDF".utf8)) else { throw CoreError.message("Invalid PDF output") }
+            // File ▸ Print builds a one-page plot view through the system print operation.
+            let operation = try PlotPrinting.operation(for:original,settings:[:])
+            guard let plot = operation.view as? PlotView, plot.dataWithPDF(inside:plot.bounds).starts(with:Data("%PDF".utf8)) else { throw CoreError.message("Print plot view did not render") }
             let fixtures = URL(fileURLWithPath:FileManager.default.currentDirectoryPath).appendingPathComponent(".build/libredwg-0.14/test/test-data")
             for version in ["2000","2013","2018"] {
                 let input = fixtures.appendingPathComponent("\(version)/Line.dwg")

@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4 — Native workspace
+
+- Rebuild each drawing window around native AppKit structure: a customizable
+  unified toolbar, window tabs as drawing tabs, a Tool Sets sidebar and a
+  Properties/Layers inspector in an `NSSplitViewController`, and sheets instead of
+  app-modal alerts. Command errors go to the command line with a beep. Drawings
+  dropped onto model space open like Dock drops.
+- Reorganize the menu bar in AutoCAD for Mac's order (Insert, Format, Tools, Draw,
+  Dimension, Modify…) with validated items, checkmarks, named Undo/Redo, Open
+  Recent, Duplicate/Rename/Move To/Revert, Page Setup/Print, Services and Window
+  tab items. Align shortcuts with Autodesk's Mac list (⌘0 Clean Screen, ⌘I, ⌘L,
+  ⌘B, ⌘U, ⇧⌘D, ⇧⌘H, ⌘,, ⌥⌘W); zoom extents moves to View ▸ Zoom and `Z E`.
+- Draw AutoCAD's crosshair and pickbox, per-mode AutoSnap markers and tooltips,
+  selection preview, grips, dragged move/copy/rotate/mirror previews, tool-specific
+  rubber bands, distance/angle readouts and the UCS icon. Add 4× MSAA lines, an
+  adaptive grid with major lines, a light model-space option and clipped text.
+- Add grip stretching in the Rust engine for every drawable type, with live
+  previews, typed points, snaps and undo. Add named undo steps, hover picking,
+  running object snap modes, and layer rename/delete/isolate.
+- Command line: clickable prompt options, autocomplete with descriptions, echoed
+  history, F2 floating history, Recent Input and context-sensitive right-click.
+  Interactive MATCHPROP; Edit ▸ Undo inside LINE removes the last segment.
+- Properties use AutoCAD property names, X/Y fields, `*VARIES*`, polyline vertex
+  stepping and measurements. Status bar aids gain Osnap/Polar menus.
+- Add Settings (⌘,), Drafting Settings (`DS`) and Drawing Units (`UN`) sheets,
+  native Print with a Plot accessory (area, scale, style, lineweights) and an
+  Export PDF save sheet with paper and scale options.
+- Convert the editor to Observation so pointer motion updates only the coordinate
+  readout. Verified by 39 core tests and new native workflow integration checks.
+
+This is still a 2D drafting preview, not a complete AutoCAD for Mac clone.
+
 ## 0.3 — Command workflows
 
 - Space/Return starts commands, accepts prompts and repeats the previous command;

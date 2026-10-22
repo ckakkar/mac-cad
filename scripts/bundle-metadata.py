@@ -20,6 +20,7 @@ info = {
     "NSHighResolutionCapable": True, "NSPrincipalClass": "NSApplication",
     "CFBundleIconFile": "AppIcon", "NSSupportsAutomaticTermination": False,
     "NSHumanReadableCopyright": "mac-cad contributors · GPL-3.0-or-later",
+    "NSLocalNetworkUsageDescription": "MacCAD looks for printers and plotters on your network when you print a drawing.",
     "CFBundleDocumentTypes": [{
         "CFBundleTypeName": "MacCAD Drawing", "CFBundleTypeRole": "Editor",
         "NSDocumentClass": "MacCAD.DrawingDocument", "LSHandlerRank": "Owner",

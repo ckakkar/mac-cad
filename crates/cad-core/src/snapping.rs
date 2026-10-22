@@ -25,6 +25,17 @@ impl Curve {
 }
 impl Engine {
     pub fn precise_snap(&self, p: Point, tolerance: f64, base: Option<Point>) -> Value {
+        self.precise_snap_modes(p, tolerance, base, None)
+    }
+    /// Object snap restricted to running modes (`endpoint`, `midpoint`, …);
+    /// `None` keeps every mode. Node/insertion follow AutoCAD's NODE/INSERT.
+    pub fn precise_snap_modes(
+        &self,
+        p: Point,
+        tolerance: f64,
+        base: Option<Point>,
+        modes: Option<&[String]>,
+    ) -> Value {
         let b = Bounds {
             min: p - Point::new(tolerance, tolerance),
             max: p + Point::new(tolerance, tolerance),
@@ -118,7 +129,11 @@ impl Engine {
         }
         if let Some((point, kind, _)) = points
             .into_iter()
-            .filter(|(q, _, _)| q.finite() && q.distance(p) <= tolerance)
+            .filter(|(q, kind, _)| {
+                q.finite()
+                    && q.distance(p) <= tolerance
+                    && modes.is_none_or(|m| m.iter().any(|mode| mode == kind))
+            })
             .min_by(|a, b| {
                 a.2.cmp(&b.2)
                     .then(a.0.distance(p).total_cmp(&b.0.distance(p)))

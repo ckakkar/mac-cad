@@ -4,6 +4,7 @@ pub mod drafting;
 pub mod exchange;
 pub mod ffi;
 pub mod geometry;
+pub mod grips;
 pub mod model;
 pub mod render;
 pub mod snapping;

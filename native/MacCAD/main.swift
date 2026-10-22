@@ -6,54 +6,33 @@ import Sparkle
     private var updater: SPUStandardUpdaterController?
     func applicationWillFinishLaunching(_ notification: Notification) {
         documents = DrawingDocumentController()
-        let key = Bundle.main.object(forInfoDictionaryKey:"SUPublicEDKey") as? String ?? ""
-        if !key.isEmpty { updater = SPUStandardUpdaterController(startingUpdater:true,updaterDelegate:nil,userDriverDelegate:nil) }
-        menu()
+        let key = Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String ?? ""
+        if !key.isEmpty { updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil) }
+        NSApp.mainMenu = MainMenu.build(appDelegate: self, documents: documents)
+        // Window tabs are the drawing file tabs; the system adds tab items to the Window menu.
+        NSWindow.allowsAutomaticWindowTabbing = true
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular); NSApp.activate(ignoringOtherApps:true)
-        if documents.documents.isEmpty { documents.newDocument(nil) }
+        NSApp.setActivationPolicy(.regular); NSApp.activate()
     }
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { true }
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {
-        documents.openDocument(withContentsOf:URL(fileURLWithPath:filename),display:true) { _,_,error in if let error { NSApp.presentError(error) } }
+        documents.openDocument(withContentsOf: URL(fileURLWithPath: filename), display: true) { _, _, error in if let error { NSApp.presentError(error) } }
         return true
     }
+    @objc func showSettings(_ sender: Any?) { SettingsWindowController.shared.showWindow(sender) }
+    @objc func closeAll(_ sender: Any?) { documents.closeAllDocuments(withDelegate: nil, didCloseAllSelector: nil, contextInfo: nil) }
     @objc func checkUpdates(_ sender: Any?) {
-        if let updater { updater.checkForUpdates(sender) }
-        else { let alert = NSAlert(); alert.messageText = "Updates are not configured in this build";alert.informativeText = "Release builds use signed updates from GitHub. You can check the project's Releases page for downloadable builds.";alert.addButton(withTitle:"View Releases");alert.addButton(withTitle:"Cancel");if alert.runModal() == .alertFirstButtonReturn {NSWorkspace.shared.open(URL(string:"https://github.com/ckakkar/mac-cad/releases")!)} }
+        if let updater { updater.checkForUpdates(sender); return }
+        let alert = NSAlert(); alert.messageText = "Updates are not configured in this build"
+        alert.informativeText = "Release builds use signed updates from GitHub. You can check the project's Releases page for downloadable builds."
+        alert.addButton(withTitle: "View Releases"); alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(URL(string: "https://github.com/ckakkar/mac-cad/releases")!) }
     }
-    @objc func help(_ sender: Any?) { NSWorkspace.shared.open(URL(string:"https://github.com/ckakkar/mac-cad#readme")!) }
-    private func menu() {
-        let main = NSMenu()
-        func group(_ title: String) -> NSMenu { let item = NSMenuItem();item.title = title;let m = NSMenu(title:title);item.submenu = m;main.addItem(item);return m }
-        func item(_ m: NSMenu,_ title: String,_ action: Selector,_ key: String = "",_ target: AnyObject? = nil,_ shift: Bool = false) {
-            let i = NSMenuItem(title:title,action:action,keyEquivalent:key);i.target = target;if shift {i.keyEquivalentModifierMask = [.command,.shift]};m.addItem(i)
-        }
-        let app = group("MacCAD")
-        item(app,"About MacCAD",#selector(NSApplication.orderFrontStandardAboutPanel(_:)),"",NSApp)
-        item(app,"Check for Updates…",#selector(checkUpdates(_:)),"",self)
-        app.addItem(.separator());item(app,"Hide MacCAD",#selector(NSApplication.hide(_:)),"h",NSApp);item(app,"Quit MacCAD",#selector(NSApplication.terminate(_:)),"q",NSApp)
-        let file = group("File")
-        item(file,"New",#selector(NSDocumentController.newDocument(_:)),"n",documents)
-        item(file,"Open…",#selector(NSDocumentController.openDocument(_:)),"o",documents)
-        file.addItem(.separator());item(file,"Close",#selector(NSWindow.performClose(_:)),"w")
-        item(file,"Save",#selector(NSDocument.save(_:)),"s");item(file,"Save As…",#selector(NSDocument.saveAs(_:)),"s",nil,true)
-        file.addItem(.separator());item(file,"Export DXF…",#selector(DrawingDocument.exportDXF(_:)));item(file,"Export Scaled PDF…",#selector(DrawingDocument.exportPDF(_:)),"p")
-        let edit = group("Edit")
-        item(edit,"Undo",#selector(DrawingDocument.undoCommand(_:)),"z");item(edit,"Redo",#selector(DrawingDocument.redoCommand(_:)),"z",nil,true);item(edit,"Redo",#selector(DrawingDocument.redoCommand(_:)),"y")
-        edit.addItem(.separator());item(edit,"Cut",#selector(NSText.cut(_:)),"x");item(edit,"Copy",#selector(NSText.copy(_:)),"c");item(edit,"Paste",#selector(NSText.paste(_:)),"v");item(edit,"Select All",#selector(NSText.selectAll(_:)),"a");item(edit,"Erase Objects",#selector(DrawingDocument.eraseObjects(_:)))
-        let view = group("View");item(view,"Zoom to Drawing",#selector(DrawingDocument.zoomExtents(_:)),"0");item(view,"Command History",#selector(DrawingDocument.toggleCommandHistory(_:)),"3");item(view,"Properties Inspector",#selector(DrawingDocument.toggleProperties(_:)),"5");item(view,"Ortho Mode",#selector(DrawingDocument.toggleOrtho(_:)),"l");item(view,"Enter Full Screen",#selector(NSWindow.toggleFullScreen(_:)),"f",nil,true)
-        item(view,"Tool Sets",#selector(DrawingDocument.toggleTools(_:)),"1");item(view,"Layers",#selector(DrawingDocument.toggleLayers(_:)),"4");item(view,"Status Bar",#selector(DrawingDocument.toggleStatus(_:)),"6");item(view,"Regenerate",#selector(DrawingDocument.regenerate(_:)),"r");item(view,"Zoom In",#selector(DrawingDocument.zoomIn(_:)),"+");item(view,"Zoom Out",#selector(DrawingDocument.zoomOut(_:)),"-")
-        func tools(_ title:String,_ values:[Tool]){let m = group(title);for tool in values{let i = NSMenuItem(title:tool.title,action:#selector(DrawingDocument.startTool(_:)),keyEquivalent:"");i.representedObject = tool.rawValue;m.addItem(i)}}
-        tools("Draw",[.line,.polyline,.rectangle,.polygon,.circle,.arc,.ellipse,.spline,.point,.text,.hatch])
-        tools("Dimension",[.dimension,.alignedDimension,.radius,.diameter,.leader,.measure])
-        tools("Modify",[.move,.copy,.rotate,.scale,.mirror,.offset,.trim,.extend,.fillet,.chamfer])
-        if let m = main.items.first(where:{$0.title == "Modify"})?.submenu{m.addItem(.separator());for command in ["JOIN","EXPLODE","REVERSE","CLOSE","SELECTSIMILAR","OVERKILL","PURGE"]{let i = NSMenuItem(title:command.capitalized,action:#selector(DrawingDocument.runCADCommand(_:)),keyEquivalent:"");i.representedObject = command;m.addItem(i)}}
-        let window = group("Window");item(window,"Minimize",#selector(NSWindow.performMiniaturize(_:)),"m");item(window,"Zoom",#selector(NSWindow.performZoom(_:)));NSApp.windowsMenu = window
-        let help = group("Help");item(help,"MacCAD on GitHub",#selector(self.help(_:)),"",self);NSApp.helpMenu = help
-        NSApp.mainMenu = main
-    }
+    @objc func help(_ sender: Any?) { NSWorkspace.shared.open(URL(string: "https://github.com/ckakkar/mac-cad/blob/main/USAGE.md")!) }
+    @objc func parity(_ sender: Any?) { NSWorkspace.shared.open(URL(string: "https://github.com/ckakkar/mac-cad/blob/main/docs/AUTOCAD_PARITY.md")!) }
+    @objc func releaseNotes(_ sender: Any?) { NSWorkspace.shared.open(URL(string: "https://github.com/ckakkar/mac-cad/releases")!) }
+    @objc func reportIssue(_ sender: Any?) { NSWorkspace.shared.open(URL(string: "https://github.com/ckakkar/mac-cad/issues/new")!) }
 }
 
 MainActor.assumeIsolated {

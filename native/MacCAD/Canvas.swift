@@ -2,172 +2,136 @@ import AppKit
 import MetalKit
 import SwiftUI
 
-private struct GPUVertex { var position: SIMD2<Float>; var color: SIMD4<Float>; var width:Float = 1 }
-private struct ViewUniforms { var center: SIMD2<Float>; var scale: SIMD2<Float>;var viewport:SIMD2<Float> }
-
-final class MetalDrawing: NSObject, MTKViewDelegate {
-    let device: MTLDevice
-    let queue: MTLCommandQueue
-    let pipeline: MTLRenderPipelineState
-    let strokePipeline:MTLRenderPipelineState
-    var camera = Camera()
-    var size = NSSize(width: 1, height: 1)
-    var origin = CADPoint.zero
-    private var lineBuffer: MTLBuffer?
-    private var fillBuffer: MTLBuffer?
-    private var lineCount = 0
-    private var fillCount = 0
-    init(view: MTKView) throws {
-        guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { throw CoreError.message("A Metal-capable GPU is required") }
-        self.device = device; self.queue = queue; view.device = device
-        view.colorPixelFormat = .bgra8Unorm
-        view.clearColor = MTLClearColor(red: 0.055, green: 0.067, blue: 0.084, alpha: 1)
-        let source = """
-        #include <metal_stdlib>
-        using namespace metal;
-        struct V { float2 position; float4 color; float width; };
-        struct U { float2 center; float2 scale; float2 viewport; };
-        struct O { float4 position [[position]]; float4 color; };
-        vertex O drawing_vertex(uint i [[vertex_id]], const device V *v [[buffer(0)]], constant U &u [[buffer(1)]]) {
-            O o; o.position=float4((v[i].position-u.center)*u.scale,0,1); o.color=v[i].color; return o;
-        }
-        vertex O stroke_vertex(uint i [[vertex_id]], const device V *v [[buffer(0)]], constant U &u [[buffer(1)]]) {
-            uint segment=(i/6)*2; float2 a=(v[segment].position-u.center)*u.scale;float2 b=(v[segment+1].position-u.center)*u.scale;
-            float2 direction=(b-a)*u.viewport;float len=length(direction);float2 normal=len>0 ? float2(-direction.y,direction.x)/len : float2(0,1);
-            const float2 corners[6]={float2(0,-1),float2(1,-1),float2(1,1),float2(0,-1),float2(1,1),float2(0,1)};
-            float2 corner=corners[i%6];float2 p=mix(a,b,corner.x)+normal*corner.y*v[segment].width/u.viewport;
-            O o;o.position=float4(p,0,1);o.color=v[segment].color;return o;
-        }
-        fragment float4 drawing_fragment(O in [[stage_in]]) { return in.color; }
-        """
-        let library = try device.makeLibrary(source: source, options: nil)
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = library.makeFunction(name: "drawing_vertex")
-        descriptor.fragmentFunction = library.makeFunction(name: "drawing_fragment")
-        descriptor.colorAttachments[0].pixelFormat = view.colorPixelFormat
-        descriptor.colorAttachments[0].isBlendingEnabled = true
-        descriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
-        descriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
-        descriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
-        descriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
-        pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
-        descriptor.vertexFunction = library.makeFunction(name:"stroke_vertex")
-        strokePipeline = try device.makeRenderPipelineState(descriptor:descriptor)
-        super.init()
-        view.delegate = self; view.isPaused = true; view.enableSetNeedsDisplay = true
-    }
-    func upload(_ scene: Scene, camera: Camera, size: NSSize, grid: Bool, lineWeights:Bool = false) {
-        origin = camera.center
-        var lines: [GPUVertex] = []; lines.reserveCapacity(scene.segments.count*2+512)
-        var fills: [GPUVertex] = []; fills.reserveCapacity(scene.triangles.count*3)
-        let vertex: (Double,Double,SIMD4<Float>) -> GPUVertex = { [origin] x,y,color in .init(position: .init(Float(x-origin.x),Float(y-origin.y)), color: color) }
-        if grid {
-            let bounds = camera.bounds(size: size, margin: 2)
-            let spacing = pow(10, floor(log10(75/camera.scale)))
-            var x = floor(bounds.min.x/spacing)*spacing
-            var y = floor(bounds.min.y/spacing)*spacing
-            let color = SIMD4<Float>(0.16,0.19,0.23,0.6)
-            while x <= bounds.max.x && lines.count < 2000 { lines.append(vertex(x,bounds.min.y,color)); lines.append(vertex(x,bounds.max.y,color)); x += spacing }
-            while y <= bounds.max.y && lines.count < 4000 { lines.append(vertex(bounds.min.x,y,color)); lines.append(vertex(bounds.max.x,y,color)); y += spacing }
-            let axis = SIMD4<Float>(0.28,0.34,0.40,0.75)
-            lines.append(vertex(bounds.min.x,0,axis)); lines.append(vertex(bounds.max.x,0,axis))
-            lines.append(vertex(0,bounds.min.y,axis)); lines.append(vertex(0,bounds.max.y,axis))
-        }
-        for s in scene.segments {
-            let c = SIMD4<Float>(s.color.0,s.color.1,s.color.2,s.color.3)
-            var a = vertex(s.ax,s.ay,c), b = vertex(s.bx,s.by,c)
-            a.width = lineWeights ? max(0.75,s.line_weight*2.83465):1;b.width = a.width
-            lines.append(a);lines.append(b)
-        }
-        for t in scene.triangles {
-            let c = SIMD4<Float>(t.color.0,t.color.1,t.color.2,t.color.3)
-            fills.append(vertex(t.ax,t.ay,c)); fills.append(vertex(t.bx,t.by,c)); fills.append(vertex(t.cx,t.cy,c))
-        }
-        lineCount = lines.count; fillCount = fills.count
-        lineBuffer = lines.isEmpty ? nil : device.makeBuffer(bytes: lines, length: lines.count*MemoryLayout<GPUVertex>.stride, options: .storageModeShared)
-        fillBuffer = fills.isEmpty ? nil : device.makeBuffer(bytes: fills, length: fills.count*MemoryLayout<GPUVertex>.stride, options: .storageModeShared)
-    }
-    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
-    func draw(in view: MTKView) {
-        guard size.width > 0, size.height > 0, let pass = view.currentRenderPassDescriptor, let drawable = view.currentDrawable, let command = queue.makeCommandBuffer(), let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { return }
-        encoder.setRenderPipelineState(pipeline)
-        var uniforms = ViewUniforms(center: .init(Float(camera.center.x-origin.x),Float(camera.center.y-origin.y)),scale: .init(Float(2*camera.scale/size.width),Float(2*camera.scale/size.height)),viewport:.init(Float(size.width),Float(size.height)))
-        encoder.setVertexBytes(&uniforms, length: MemoryLayout<ViewUniforms>.stride, index: 1)
-        if let buffer = fillBuffer { encoder.setVertexBuffer(buffer, offset: 0, index: 0); encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: fillCount) }
-        if let buffer = lineBuffer {encoder.setRenderPipelineState(strokePipeline);encoder.setVertexBuffer(buffer,offset:0,index:0);encoder.drawPrimitives(type:.triangle,vertexStart:0,vertexCount:lineCount/2*6)}
-        encoder.endEncoding(); command.present(drawable); command.commit()
-    }
-}
-
+/// The model-space canvas: Metal geometry, a text layer that redraws with the
+/// view, and an interaction overlay (crosshair, snaps, grips, previews) that
+/// redraws with the pointer.
 @MainActor final class DrawingCanvas: NSView {
     let model: EditorModel
+    let settings = AppSettings.shared
     private let metal = MTKView()
-    private let overlay = CanvasOverlay()
+    private let labels = CanvasLayerView()
+    private let overlay = CanvasLayerView()
     private var renderer: MetalDrawing?
     var camera = Camera()
-    var points:[CADPoint] {model.session.points}
-    private let dynamicField:CADCommandField
+    var points: [CADPoint] { model.session.points }
+    private let dynamicField: CADCommandField
     private let dynamicPrompt = NSTextField(labelWithString: "")
-    private var viewHistory:[Camera] = []
+    private var viewHistory: [Camera] = []
+    private var lastRemembered = Date.distantPast
+    private var justFitted = false
+
+    /// Raw pointer location in view coordinates; nil while outside the canvas.
+    var pointer: NSPoint?
+    /// Snapped and constrained pointer location in drawing coordinates.
     var cursor = CADPoint.zero
     var snapKind = "none"
-    private var scene = Scene()
+    var hoverID: UInt64?
+    var gripPreview: [Double] = []
+    private(set) var scene = Scene()
+    /// Each entity's contiguous run of scene segments, for highlight and ghosts.
+    private(set) var entityRanges: [UInt64: Range<Int>] = [:]
     private var sceneBounds: CADBounds?
     private var sceneRevision: UInt64 = .max
     private var loading = false
     private var pendingRefresh = false
     private var tracking: NSTrackingArea?
     private var motionSerial = 0
-    private var isPanning = false
-    private var selectionStart: CADPoint?
-    private var selectionEnd: CADPoint?
+    var isPanning = false { didSet { if isPanning != oldValue { window?.invalidateCursorRects(for: self); overlay.needsDisplay = true } } }
+    var selectionStart: CADPoint?
+    var selectionEnd: CADPoint?
     private var extendSelection = false
     private var gestureGeneration = 0
+    private static let blankCursor = NSCursor(image: NSImage(size: NSSize(width: 1, height: 1)), hotSpot: .zero)
+
     override var acceptsFirstResponder: Bool { true }
-    override func hitTest(_ point:NSPoint)->NSView? {
-        if !dynamicField.isHidden,dynamicField.frame.contains(point){return dynamicField.hitTest(convert(point,to:dynamicField))}
-        return bounds.contains(point) ? self:nil
+    override var isFlipped: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        if !dynamicField.isHidden, dynamicField.frame.contains(local) { return dynamicField.hitTest(local) ?? dynamicField }
+        return bounds.contains(local) ? self : nil
     }
 
     init(model: EditorModel) {
-        self.model = model;dynamicField = CADCommandField(model:model)
+        self.model = model; dynamicField = CADCommandField(model: model)
         super.init(frame: .zero)
-        addSubview(metal); addSubview(overlay);overlay.canvas = self
-        dynamicField.isHidden = true;dynamicField.isBordered = true;dynamicField.drawsBackground = true;dynamicField.backgroundColor = .textBackgroundColor;dynamicField.setAccessibilityLabel("Dynamic CAD input")
-        dynamicPrompt.font = .monospacedSystemFont(ofSize:10,weight:.regular);dynamicPrompt.textColor = .labelColor;dynamicPrompt.backgroundColor = .controlBackgroundColor;dynamicPrompt.drawsBackground = true;dynamicPrompt.isHidden = true
-        addSubview(dynamicPrompt);addSubview(dynamicField)
+        clipsToBounds = true
+        wantsLayer = true
+        addSubview(metal); addSubview(labels); addSubview(overlay)
+        labels.draw = { [weak self] in self?.drawLabels() }
+        overlay.draw = { [weak self] in self?.drawInteraction() }
+        dynamicField.isHidden = true; dynamicField.isBordered = true; dynamicField.isBezeled = true; dynamicField.bezelStyle = .roundedBezel
+        dynamicField.drawsBackground = true; dynamicField.backgroundColor = .textBackgroundColor; dynamicField.controlSize = .small
+        dynamicField.font = .monospacedSystemFont(ofSize: 11, weight: .regular); dynamicField.placeholderString = nil
+        dynamicField.setAccessibilityLabel("Dynamic input")
+        dynamicField.didSubmit = { [weak self] in guard let self else { return }; window?.makeFirstResponder(self); updateDynamicInput() }
+        dynamicPrompt.font = .systemFont(ofSize: 11); dynamicPrompt.textColor = .labelColor
+        dynamicPrompt.wantsLayer = true; dynamicPrompt.drawsBackground = true; dynamicPrompt.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.92)
+        dynamicPrompt.layer?.cornerRadius = 4; dynamicPrompt.layer?.borderWidth = 0.5; dynamicPrompt.layer?.borderColor = NSColor.separatorColor.cgColor
+        dynamicPrompt.isHidden = true; dynamicPrompt.lineBreakMode = .byTruncatingTail
+        addSubview(dynamicPrompt); addSubview(dynamicField)
         do { renderer = try MetalDrawing(view: metal) } catch { model.show(error) }
-        setAccessibilityElement(true); setAccessibilityRole(.group); setAccessibilityLabel("Drawing canvas")
+        setAccessibilityElement(true); setAccessibilityRole(.group); setAccessibilityLabel("Model space drawing canvas")
         model.invalidate = { [weak self] in self?.refresh(force: true) }
-        model.cancelGesture = { [weak self] in self?.gestureGeneration += 1; self?.selectionStart = nil; self?.selectionEnd = nil; self?.snapKind = "none"; self?.overlay.needsDisplay = true }
-        model.fitView = { [weak self] in self?.fit() }
-        model.acceptCoordinate = {[weak self] p,relative in guard let self else{return};self.model.enterPoint(relative ? (points.last ?? .zero)+p:p)}
-        model.finishGesture = {[weak model] in model?.execute("")}
-        model.acceptScalar = {[weak model] in model?.execute(String($0))}
-        model.syncInput = {[weak self] in self?.dynamicField.synchronize();self?.model.syncCommandBar?();self?.updateDynamicInput()}
-        model.focusCommand = {[weak self] in
-            guard let self else{return}
-            if self.model.dynamicInput {updateDynamicInput(force:true);dynamicField.focus()}
-            else {self.model.showCommandLine = true;self.model.focusCommandBar?()}
+        model.cancelGesture = { [weak self] in
+            guard let self else { return }
+            gestureGeneration += 1; selectionStart = nil; selectionEnd = nil; snapKind = "none"; gripPreview = []; overlay.needsDisplay = true
         }
-        model.zoomBy = {[weak self] amount in self?.zoomCentered(amount)}
-        model.fitWindow = {[weak self] b in guard let self else{return};rememberView();camera.fit(b,size:bounds.size);refresh(force:true)}
-        model.previousView = {[weak self] in guard let self,let previous = viewHistory.popLast() else{return};camera = previous;refresh(force:true)}
-
+        model.fitView = { [weak self] in self?.fit() }
+        model.syncInput = { [weak self] in self?.dynamicField.synchronize(); self?.model.syncCommandBar?(); self?.updateDynamicInput() }
+        model.focusCommand = { [weak self] in
+            guard let self else { return }
+            if model.dynamicInput && pointer != nil { updateDynamicInput(force: true); dynamicField.focus() }
+            else { model.showCommandLine = true; model.focusCommandBar?() }
+        }
+        model.zoomBy = { [weak self] amount in self?.zoomCentered(amount) }
+        model.fitWindow = { [weak self] b in guard let self else { return }; rememberView(); camera.fit(b, size: bounds.size); refresh(force: true) }
+        model.previousView = { [weak self] in self?.restorePreviousView() }
+        model.visibleBounds = { [weak self] in guard let self, bounds.width > 0 else { return nil }; return camera.bounds(size: bounds.size) }
+        observeSettings()
+        registerForDraggedTypes([.fileURL])
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
-    override func layout() { super.layout(); metal.frame = bounds; overlay.frame = bounds; refresh(force: true) }
+
+    /// Preferences changed in Settings repaint every open canvas.
+    private func observeSettings() {
+        withObservationTracking {
+            _ = (settings.background, settings.showUCSIcon, settings.crosshairSize, settings.pickboxSize, settings.gripSize, settings.snapMarker, settings.snapTooltip, settings.selectionPreview)
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.refresh(force: true); self?.observeSettings() }
+        }
+    }
+
+    override func layout() {
+        super.layout(); metal.frame = bounds; labels.frame = bounds; overlay.frame = bounds; refresh(force: true)
+    }
     override func updateTrackingAreas() {
         super.updateTrackingAreas(); if let t = tracking { removeTrackingArea(t) }
-        let t = NSTrackingArea(rect: .zero, options: [.activeInKeyWindow,.mouseMoved,.mouseEnteredAndExited,.inVisibleRect], owner: self); addTrackingArea(t); tracking = t
+        let t = NSTrackingArea(rect: .zero, options: [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited, .inVisibleRect], owner: self); addTrackingArea(t); tracking = t
     }
+    /// AutoCAD draws its own crosshair; the system pointer is hidden over model space.
+    override func resetCursorRects() {
+        addCursorRect(visibleRect, cursor: isPanning || model.tool == .pan ? .openHand : Self.blankCursor)
+    }
+    /// Model space takes keyboard focus when its window opens, so typing starts commands.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        window.initialFirstResponder = self
+        DispatchQueue.main.async { [weak self] in guard let self, window.firstResponder === window || window.firstResponder is NSTextView else { return }; window.makeFirstResponder(self) }
+    }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); refresh(force: true) }
+
     func fit() {
-        Task { if let b = await model.extents() { rememberView();camera.fit(b, size: bounds.size); refresh(force: true) } }
+        Task {
+            if let b = await model.extents() { rememberView(); camera.fit(b, size: bounds.size); justFitted = true; refresh(force: true) }
+        }
     }
     func refresh(force: Bool = false) {
         renderer?.camera = camera; renderer?.size = bounds.size
+        renderer?.clearColor = settings.background == .dark ? MTLClearColor(red: 0.13, green: 0.15, blue: 0.18, alpha: 1) : MTLClearColor(red: 1, green: 1, blue: 1, alpha: 1)
+        window?.invalidateCursorRects(for: self)
         updateDynamicInput()
-        metal.needsDisplay = true; overlay.needsDisplay = true
+        metal.needsDisplay = true; labels.needsDisplay = true; overlay.needsDisplay = true
         guard bounds.width > 0, bounds.height > 0 else { return }
         let visible = camera.bounds(size: bounds.size)
         if !force, sceneRevision == model.revision, sceneBounds?.contains(visible) == true { return }
@@ -178,169 +142,293 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
         let scale = camera.scale
         Task {
             do {
-                let result = try await model.core.scene(bounds: b, tolerance: 0.35/scale)
+                let result = try await model.core.scene(bounds: b, tolerance: 0.35 / scale)
                 scene = result; sceneBounds = b; sceneRevision = revision
-                renderer?.upload(result, camera: camera, size: bounds.size, grid: model.grid, lineWeights:model.lineWeights)
+                var ranges: [UInt64: Range<Int>] = [:]
+                var start = 0
+                for i in result.segments.indices where i + 1 == result.segments.count || result.segments[i + 1].entity != result.segments[i].entity {
+                    ranges[result.segments[i].entity] = start..<(i + 1); start = i + 1
+                }
+                entityRanges = ranges
+                let grid = model.grid ? MetalDrawing.GridStyle(spacing: model.gridSnap ? model.snapSpacing : nil, minor: settings.gridColor, major: settings.majorGridColor, axis: settings.axisColor) : nil
+                renderer?.upload(result, camera: camera, size: bounds.size, grid: grid, lineWeights: model.lineWeights, settings: settings)
                 renderer?.camera = camera; renderer?.size = bounds.size
-                metal.needsDisplay = true; overlay.needsDisplay = true
+                metal.needsDisplay = true; labels.needsDisplay = true; overlay.needsDisplay = true
             } catch { model.show(error) }
             loading = false
             if pendingRefresh { pendingRefresh = false; refresh(force: true) }
         }
     }
-    override func mouseEntered(with event: NSEvent) { NSCursor.crosshair.push() }
-    override func mouseExited(with event: NSEvent) { NSCursor.pop(); overlay.needsDisplay = true }
+
+    // MARK: File drops
+
+    /// Dropping drawings onto model space opens them, as dropping on the Dock icon does.
+    private func drawingURLs(_ info: NSDraggingInfo) -> [URL] {
+        let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        return urls.filter { ["maccad", "dxf", "dwg"].contains($0.pathExtension.lowercased()) }
+    }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { drawingURLs(sender).isEmpty ? [] : .copy }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = drawingURLs(sender)
+        for url in urls { NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, error in if let error { NSApp.presentError(error) } } }
+        return !urls.isEmpty
+    }
+
+    // MARK: Pointer
+
+    /// Whether the active prompt expects a point, so object snaps apply.
+    var wantsPoint: Bool { model.session.active && !model.session.selecting && model.tool != .pan }
+    private var snapTolerance: Double { settings.apertureSize / camera.scale }
+    private func snapRequest(_ p: CADPoint) -> [String: Any] {
+        ["op": "snap", "point": p.json, "tolerance": snapTolerance, "base": points.last?.json as Any? ?? NSNull(), "modes": Array(settings.snapModes)]
+    }
+    override func mouseEntered(with event: NSEvent) { pointer = convert(event.locationInWindow, from: nil); overlay.needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { pointer = nil; hoverID = nil; overlay.needsDisplay = true; updateDynamicInput() }
     override func mouseMoved(with event: NSEvent) {
-        let p = camera.world(convert(event.locationInWindow, from: nil), size: bounds.size)
+        let screen = convert(event.locationInWindow, from: nil)
+        pointer = screen
+        let p = camera.world(screen, size: bounds.size)
         motionSerial += 1; let serial = motionSerial
-        cursor = constrained(p); model.coordinate = cursor; snapKind = "none"; overlay.needsDisplay = true
-        guard model.snapping else { return }
-        Task {
-            guard let response = try? await model.core.request(["op":"snap","point":p.json,"tolerance":9/camera.scale,"base":points.last?.json as Any? ?? NSNull()]), serial == motionSerial else { return }
-            if let q = response["point"] as? [String:Double] {
-                cursor = CADPoint(x:q["x"] ?? p.x,y:q["y"] ?? p.y); snapKind = response["kind"] as? String ?? "none"
-                if snapKind == "none" { cursor = constrained(cursor) }
-                model.coordinate = cursor; overlay.needsDisplay = true
+        cursor = constrained(p); snapKind = "none"
+        if !model.session.active, let grip = grip(at: screen) { cursor = grip.point }
+        model.pointer.coordinate = cursor; overlay.needsDisplay = true
+        updateDynamicInput()
+        if wantsPoint {
+            hoverID = nil
+            Task {
+                if model.snapping, settings.snapModes.isEmpty == false, let response = try? await model.core.request(snapRequest(p)), serial == motionSerial,
+                   let q = response["point"] as? [String: Double], let kind = response["kind"] as? String, kind != "none" {
+                    cursor = CADPoint(x: q["x"] ?? p.x, y: q["y"] ?? p.y); snapKind = kind
+                    model.pointer.coordinate = cursor; overlay.needsDisplay = true
+                }
+                guard serial == motionSerial, let grip = model.session.hotGrip else { return }
+                let preview = try? await model.core.request(["op": "grip_preview", "id": grip.id, "index": grip.index, "point": cursor.json, "tolerance": 0.35 / camera.scale])
+                if serial == motionSerial { gripPreview = (preview?["segments"] as? [Double]) ?? []; overlay.needsDisplay = true }
+            }
+        } else if settings.selectionPreview && !isPanning && model.tool != .pan {
+            Task {
+                let response = try? await model.core.request(["op": "hover", "point": p.json, "tolerance": settings.pickboxSize / camera.scale])
+                guard serial == motionSerial else { return }
+                let id = (response?["id"] as? NSNumber)?.uint64Value
+                if id != hoverID { hoverID = id; overlay.needsDisplay = true }
             }
         }
     }
     func constrained(_ p: CADPoint) -> CADPoint {
-        guard let base = points.last else { return model.gridSnap ? CADPoint(x:(p.x/model.snapSpacing).rounded()*model.snapSpacing,y:(p.y/model.snapSpacing).rounded()*model.snapSpacing):p }
-        let p = model.gridSnap ? CADPoint(x:(p.x/model.snapSpacing).rounded()*model.snapSpacing,y:(p.y/model.snapSpacing).rounded()*model.snapSpacing):p
-        let delta = p-base
-        if model.ortho { return abs(delta.x) >= abs(delta.y) ? CADPoint(x:p.x,y:base.y) : CADPoint(x:base.x,y:p.y) }
-        if model.polar { let angle = (atan2(delta.y,delta.x)/(.pi/4)).rounded()*(.pi/4); let radius = hypot(delta.x,delta.y); return base+CADPoint(x:cos(angle),y:sin(angle))*radius }
+        let s = model.snapSpacing
+        let p = model.gridSnap ? CADPoint(x: (p.x / s).rounded() * s, y: (p.y / s).rounded() * s) : p
+        guard let base = points.last, wantsPoint else { return p }
+        let delta = p - base
+        if model.ortho { return abs(delta.x) >= abs(delta.y) ? CADPoint(x: p.x, y: base.y) : CADPoint(x: base.x, y: p.y) }
+        if model.polar {
+            let step = settings.polarIncrement * .pi / 180
+            let angle = (atan2(delta.y, delta.x) / step).rounded() * step
+            let radius = hypot(delta.x, delta.y)
+            return base + CADPoint(x: cos(angle), y: sin(angle)) * radius
+        }
         return p
+    }
+    /// Grips are live only between commands, as in AutoCAD.
+    func grip(at screen: NSPoint) -> CADGrip? {
+        guard !model.session.active else { return nil }
+        let reach = settings.gripSize / 2 + 2
+        return model.grips.first { g in let s = camera.screen(g.point, size: bounds.size); return abs(s.x - screen.x) <= reach && abs(s.y - screen.y) <= reach }
     }
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        if event.modifierFlags.contains(.option) || model.tool == .pan { isPanning = true;rememberView(); return }
-        let p = camera.world(convert(event.locationInWindow, from:nil),size:bounds.size)
+        if event.modifierFlags.contains(.option) || model.tool == .pan { isPanning = true; rememberView(); return }
+        let screen = convert(event.locationInWindow, from: nil)
+        let p = camera.world(screen, size: bounds.size)
+        if event.clickCount == 2, !model.session.active {
+            // Double-click opens an object's properties, like AutoCAD's quick properties.
+            model.operation(["op": "pick", "point": p.json, "tolerance": settings.pickboxSize / camera.scale, "extend": false, "mode": "replace"])
+            model.inspectorTab = .properties; model.showInspector = true; return
+        }
+        if let grip = grip(at: screen) { model.startGrip(grip); gripPreview = []; return }
         if model.selecting { selectionStart = p; selectionEnd = nil; extendSelection = event.modifierFlags.contains(.shift); return }
         let generation = gestureGeneration
+        let request = snapRequest(p)
         Task {
             var q = constrained(p)
-            if model.snapping, let result = try? await model.core.request(["op":"snap","point":p.json,"tolerance":9/camera.scale,"base":points.last?.json as Any? ?? NSNull()]), result["kind"] as? String != "none", let v = result["point"] as? [String:Double] { q = CADPoint(x:v["x"] ?? p.x,y:v["y"] ?? p.y) }
-            if generation == gestureGeneration { accept(q, shift: event.modifierFlags.contains(.shift)) }
+            if model.snapping, !settings.snapModes.isEmpty, let result = try? await model.core.request(request), result["kind"] as? String != "none", let v = result["point"] as? [String: Double] { q = CADPoint(x: v["x"] ?? p.x, y: v["y"] ?? p.y) }
+            if generation == gestureGeneration { model.enterPoint(q); gripPreview = []; overlay.needsDisplay = true }
         }
     }
-    func accept(_ p:CADPoint,shift:Bool = false) {model.enterPoint(p);overlay.needsDisplay = true}
-    func completePath() {model.execute("")}
-    private func rememberView() {viewHistory.append(camera);if viewHistory.count>32{viewHistory.removeFirst()}}
-    private func zoomCentered(_ amount:Double) {rememberView();camera.scale = min(max(camera.scale*amount,1e-8),1e8);refresh(force:true)}
-    private func updateDynamicInput(force:Bool = false) {
-        let visible = model.dynamicInput && (force || model.session.active || !model.commandText.isEmpty)
-        if !model.dynamicInput,dynamicField.currentEditor() != nil {window?.makeFirstResponder(self)}
-        dynamicField.isHidden = !visible;dynamicPrompt.isHidden = !visible
-        guard visible else{return}
-        dynamicField.synchronize();dynamicPrompt.stringValue = model.session.active ? model.session.prompt:"Command:"
-        if dynamicField.currentEditor() == nil || force {
-            let p = camera.screen(cursor,size:bounds.size)
-            let x = min(max(p.x+18,8),max(8,bounds.width-360)),y = min(max(p.y-58,8),max(8,bounds.height-60))
-            dynamicPrompt.frame = NSRect(x:x,y:y+27,width:350,height:22);dynamicField.frame = NSRect(x:x,y:y,width:190,height:25)
-        }
-    }
-    override func rightMouseDown(with event:NSEvent) {
-        let menu = NSMenu()
-        func action(_ title:String,_ selector:Selector){let item = NSMenuItem(title:title,action:selector,keyEquivalent:"");item.target = self;menu.addItem(item)}
-        action(model.session.active ? "Enter":"Repeat \(model.lastCommand ?? "Command")",#selector(enterCommand))
-        action("Cancel",#selector(cancelCurrent));menu.addItem(.separator());action("Undo",#selector(undoCommand))
-        NSMenu.popUpContextMenu(menu,with:event,for:self)
-    }
-    @objc private func enterCommand(){model.submit()}
-    @objc private func cancelCurrent(){model.cancel()}
-    @objc private func undoCommand(){model.execute("UNDO")}
-    override func otherMouseDown(with event:NSEvent){if event.buttonNumber == 2 {if event.clickCount == 2{fit()}else{isPanning = true;rememberView()}}}
-    override func otherMouseUp(with event:NSEvent){isPanning = false}
     override func mouseDragged(with event: NSEvent) {
-        if isPanning { camera.center.x -= event.deltaX/camera.scale; camera.center.y += event.deltaY/camera.scale; refresh() }
-        else if selectionStart != nil {selectionEnd = camera.world(convert(event.locationInWindow,from:nil),size:bounds.size);overlay.needsDisplay = true}
-        else { mouseMoved(with:event) }
+        if isPanning { pan(event) }
+        else if selectionStart != nil {
+            pointer = convert(event.locationInWindow, from: nil)
+            selectionEnd = camera.world(pointer!, size: bounds.size); overlay.needsDisplay = true
+        } else { mouseMoved(with: event) }
     }
     override func mouseUp(with event: NSEvent) {
         isPanning = false
-        guard let start = selectionStart else {return};let end = selectionEnd
-        selectionStart = nil;selectionEnd = nil;overlay.needsDisplay = true
-        if let end, start.distance(end)*camera.scale>3 {
-            model.operation(["op":"select_window","bounds":["min":CADPoint(x:min(start.x,end.x),y:min(start.y,end.y)).json,"max":CADPoint(x:max(start.x,end.x),y:max(start.y,end.y)).json],"crossing":end.x<start.x,"extend":true,"mode":extendSelection ? "remove":"add"])
-        } else {model.operation(["op":"pick","point":start.json,"tolerance":7/camera.scale,"extend":true,"mode":extendSelection ? "remove":"add"])}
+        guard let start = selectionStart else { return }
+        let end = selectionEnd
+        selectionStart = nil; selectionEnd = nil; overlay.needsDisplay = true
+        if let end, start.distance(end) * camera.scale > 3 {
+            model.operation(["op": "select_window", "bounds": ["min": CADPoint(x: min(start.x, end.x), y: min(start.y, end.y)).json, "max": CADPoint(x: max(start.x, end.x), y: max(start.y, end.y)).json], "crossing": end.x < start.x, "extend": true, "mode": extendSelection ? "remove" : "add"])
+        } else {
+            model.operation(["op": "pick", "point": start.json, "tolerance": settings.pickboxSize / camera.scale, "extend": true, "mode": extendSelection ? "remove" : "add"])
+        }
     }
-    override func otherMouseDragged(with event: NSEvent) { guard isPanning else{return};camera.center.x -= event.deltaX/camera.scale; camera.center.y += event.deltaY/camera.scale; refresh() }
+    private func pan(_ event: NSEvent) {
+        camera.center.x -= event.deltaX / camera.scale; camera.center.y += event.deltaY / camera.scale; justFitted = false; refresh()
+    }
+    override func otherMouseDown(with event: NSEvent) {
+        guard event.buttonNumber == 2 else { return }
+        if event.clickCount == 2 { fit() } else { isPanning = true; rememberView() }
+    }
+    override func otherMouseUp(with event: NSEvent) { isPanning = false }
+    override func otherMouseDragged(with event: NSEvent) { if isPanning { pan(event) } }
+
+    // MARK: Navigation
+
+    private func rememberView() { viewHistory.append(camera); if viewHistory.count > 32 { viewHistory.removeFirst() }; lastRemembered = Date() }
+    /// Continuous gestures record one Zoom Previous step, not one per event.
+    private func rememberGesture(_ event: NSEvent) {
+        if event.phase == .began || (event.phase.isEmpty && Date().timeIntervalSince(lastRemembered) > 0.6) { rememberView() }
+        if event.phase.isEmpty { lastRemembered = Date() }
+    }
+    private func restorePreviousView() {
+        guard let previous = viewHistory.popLast() else { NSSound.beep(); return }
+        camera = previous; justFitted = false; refresh(force: true)
+    }
+    private func zoomCentered(_ amount: Double) { rememberView(); camera.scale = min(max(camera.scale * amount, 1e-8), 1e8); justFitted = false; refresh(force: true) }
     override func scrollWheel(with event: NSEvent) {
-        if event.modifierFlags.contains(.command) || !event.hasPreciseScrollingDeltas { zoom(exp(event.scrollingDeltaY*0.025),event:event) }
-        else { camera.center.x -= event.scrollingDeltaX/camera.scale; camera.center.y += event.scrollingDeltaY/camera.scale; refresh() }
+        if event.modifierFlags.contains(.command) || !event.hasPreciseScrollingDeltas { rememberGesture(event); zoom(exp(event.scrollingDeltaY * 0.025), event: event) }
+        else { camera.center.x -= event.scrollingDeltaX / camera.scale; camera.center.y += event.scrollingDeltaY / camera.scale; justFitted = false; refresh() }
     }
-    override func magnify(with event: NSEvent) { zoom(max(0.1,1+event.magnification),event:event) }
+    override func magnify(with event: NSEvent) { rememberGesture(event); zoom(max(0.1, 1 + event.magnification), event: event) }
+    /// Two-finger double-tap toggles between the drawing extents and the previous view.
+    override func smartMagnify(with event: NSEvent) { if justFitted { restorePreviousView() } else { fit() } }
     func zoom(_ amount: Double, event: NSEvent) {
-        rememberView()
-        let p = convert(event.locationInWindow,from:nil)
-        let before = camera.world(p,size:bounds.size)
-        camera.scale = min(max(camera.scale*amount,1e-8),1e8)
-        camera.center = camera.center + before-camera.world(p,size:bounds.size)
+        let p = convert(event.locationInWindow, from: nil)
+        let before = camera.world(p, size: bounds.size)
+        camera.scale = min(max(camera.scale * amount, 1e-8), 1e8)
+        camera.center = camera.center + before - camera.world(p, size: bounds.size)
+        justFitted = false
         // Retessellate curves/grid at the new screen-space tolerance.
-        refresh(force:true)
+        refresh(force: true)
     }
-    override func keyDown(with event:NSEvent) {
-        if model.handleCADKey(event) {return}
+
+    // MARK: Keyboard
+
+    override func keyDown(with event: NSEvent) {
+        if model.handleCADKey(event) { return }
         switch event.keyCode {
-        case 53:model.cancel()
-        case 51,117:model.choose(.erase)
-        case 36,76:model.submit()
+        case 53: model.cancel()
+        case 51, 117: if model.selection.isEmpty || model.session.active { NSSound.beep() } else { model.choose(.erase) }
+        case 36, 76: model.submit()
         case 49:
-            if model.spaceSubmits {model.submit()}else{model.commandText += " ";model.focusCommand?()}
+            if model.spaceSubmits { model.submit() } else { model.commandText += " "; model.focusCommand?() }
         default:
-            if let text = event.characters,event.modifierFlags.intersection([.command,.control]).isEmpty,!text.isEmpty,text.unicodeScalars.allSatisfy({$0.value>=32}) {model.commandText += text;model.focusCommand?()}
-            else{super.keyDown(with:event)}
+            if let text = event.characters, event.modifierFlags.intersection([.command, .control]).isEmpty, !text.isEmpty, text.unicodeScalars.allSatisfy({ $0.value >= 32 && $0.value < 0xF700 }) { model.commandText += text; model.focusCommand?() }
+            else { super.keyDown(with: event) }
         }
     }
-    fileprivate func drawOverlay() {
-        let size = bounds.size
-        updateDynamicInput()
-        if let start = selectionStart, let end = selectionEnd {
-            let a = camera.screen(start,size:size), b = camera.screen(end,size:size)
-            let rect = NSRect(x:min(a.x,b.x),y:min(a.y,b.y),width:abs(a.x-b.x),height:abs(a.y-b.y))
-            let color: NSColor = end.x<start.x ? .systemGreen : .systemBlue
-            color.withAlphaComponent(0.12).setFill();NSBezierPath(rect:rect).fill();color.setStroke();let outline = NSBezierPath(rect:rect);if end.x<start.x{outline.setLineDash([5,3],count:2,phase:0)};outline.stroke()
+
+    // MARK: Dynamic input
+
+    private func updateDynamicInput(force: Bool = false) {
+        let visible = model.dynamicInput && (pointer != nil || force) && (force || model.session.active || !model.commandText.isEmpty)
+        if !model.dynamicInput, dynamicField.currentEditor() != nil { window?.makeFirstResponder(self) }
+        // The prompt follows the crosshair; the input box appears once the user types.
+        let typing = dynamicField.currentEditor() != nil || !model.commandText.isEmpty || force
+        dynamicField.isHidden = !(visible && typing); dynamicPrompt.isHidden = !visible
+        guard visible else { return }
+        dynamicField.synchronize()
+        dynamicPrompt.stringValue = " " + (model.session.active ? model.session.prompt : "Enter command:") + " "
+        // The tooltip follows the crosshair until the user starts typing into it.
+        if dynamicField.currentEditor() == nil || model.commandText.isEmpty || force {
+            let p = pointer ?? camera.screen(cursor, size: bounds.size)
+            let promptWidth = min(max(dynamicPrompt.intrinsicContentSize.width, 120), 420)
+            let x = min(max(p.x + 22, 8), max(8, bounds.width - promptWidth - 8)), y = min(max(p.y - 56, 8), max(8, bounds.height - 60))
+            dynamicPrompt.frame = NSRect(x: x, y: y + 26, width: promptWidth, height: 20); dynamicField.frame = NSRect(x: x, y: y, width: 150, height: 22)
         }
-        for label in scene.labels {
-            let at = camera.screen(label.at,size:size); let height = label.height*camera.scale
-            guard height >= 3, height < 2000, at.x > -2000, at.x < size.width+2000, at.y > -2000, at.y < size.height+2000 else { continue }
-            NSGraphicsContext.saveGraphicsState()
-            let transform = AffineTransform(translationByX:at.x,byY:at.y); (transform as NSAffineTransform).concat()
-            NSAffineTransform.rotate(label.rotation*180 / .pi)
-            let color = NSColor(srgbRed:CGFloat(label.color[0]),green:CGFloat(label.color[1]),blue:CGFloat(label.color[2]),alpha:1)
-            (label.text as NSString).draw(at:.zero,withAttributes:[.font:NSFont.systemFont(ofSize:height),.foregroundColor:color])
-            NSGraphicsContext.restoreGraphicsState()
-        }
-        guard !points.isEmpty else { drawSnap(size); return }
-        let path = NSBezierPath(); path.lineWidth = 1.5; path.setLineDash([5,4],count:2,phase:0)
-        NSColor.controlAccentColor.setStroke()
-        let a = camera.screen(points[0],size:size); let b = camera.screen(cursor,size:size)
-        switch model.tool {
-        case .rectangle, .hatch: path.appendRect(NSRect(x:min(a.x,b.x),y:min(a.y,b.y),width:abs(b.x-a.x),height:abs(b.y-a.y)))
-        case .select where model.session.name == "ZOOM":path.appendRect(NSRect(x:min(a.x,b.x),y:min(a.y,b.y),width:abs(b.x-a.x),height:abs(b.y-a.y)))
-        case .circle, .arc: let r = hypot(b.x-a.x,b.y-a.y); path.appendOval(in:NSRect(x:a.x-r,y:a.y-r,width:r*2,height:r*2))
-        default: path.move(to:a); for p in points.dropFirst() { path.line(to:camera.screen(p,size:size)) }; path.line(to:b)
-        }
-        path.stroke(); drawSnap(size)
     }
-    private func drawSnap(_ size: NSSize) {
-        guard snapKind != "none" else { return }
-        let p = camera.screen(cursor,size:size); NSColor.systemMint.setStroke()
-        let marker = NSBezierPath(rect:NSRect(x:p.x-4,y:p.y-4,width:8,height:8)); marker.lineWidth = 1.5; marker.stroke()
+
+    // MARK: Context menu
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        func item(_ title: String, _ key: String = "", _ action: @escaping () -> Void) -> NSMenuItem {
+            let i = ClosureMenuItem(title: title, keyEquivalent: key, action: action); menu.addItem(i); return i
+        }
+        let session = model.session
+        if session.active {
+            _ = item("Enter") { [model] in model.submit() }
+            _ = item("Cancel") { [model] in model.cancel() }
+            let options = CommandSession.options(in: session.prompt).options
+            if !options.isEmpty {
+                menu.addItem(.separator())
+                for option in options { _ = item(option.prefix(1).uppercased() + option.dropFirst()) { [model] in model.execute(option) } }
+            }
+        } else {
+            if let last = model.lastCommand { _ = item("Repeat \(last)") { [model] in model.execute(last) } }
+            var recent: [String] = []
+            for text in model.inputHistory.reversed() where !recent.contains(text) && recent.count < 10 { recent.append(text) }
+            if !recent.isEmpty {
+                let sub = NSMenu()
+                for text in recent { sub.addItem(ClosureMenuItem(title: text, keyEquivalent: "") { [model] in model.execute(text) }) }
+                let i = NSMenuItem(title: "Recent Input", action: nil, keyEquivalent: ""); i.submenu = sub; menu.addItem(i)
+            }
+            menu.addItem(.separator())
+            if !model.selection.isEmpty {
+                for tool in [Tool.erase, .move, .copy, .scale, .rotate, .mirror] { item(tool == .copy ? "Copy Selection" : tool.title) { [model] in model.choose(tool) }.image = tool.image }
+                menu.addItem(.separator())
+                _ = item("Cut") { [model] in model.copySelection(cut: true) }
+                _ = item("Copy") { [model] in model.copySelection() }
+            }
+            item("Paste") { [model] in model.pasteSelection() }.isEnabled = model.canPaste
+            menu.addItem(.separator())
+            item(model.undoLabel.map { "Undo \($0)" } ?? "Undo") { [model] in model.undo() }.isEnabled = model.canUndo
+            item(model.redoLabel.map { "Redo \($0)" } ?? "Redo") { [model] in model.redo() }.isEnabled = model.canRedo
+            menu.addItem(.separator())
+            if model.selection.isEmpty { _ = item("Select All") { [model] in model.operation(["op": "select_all"]) } }
+            else {
+                _ = item("Deselect All") { [model] in model.operation(["op": "select", "ids": []]) }
+                _ = item("Select Similar") { [model] in model.runFromMenu("SELECTSIMILAR") }
+                _ = item("Properties") { [model] in model.inspectorTab = .properties; model.showInspector = true }
+            }
+        }
+        menu.addItem(.separator())
+        _ = item("Pan") { [model] in model.choose(.pan) }
+        let zoom = NSMenu()
+        zoom.addItem(ClosureMenuItem(title: "Extents", keyEquivalent: "") { [weak self] in self?.fit() })
+        zoom.addItem(ClosureMenuItem(title: "Window", keyEquivalent: "") { [model] in model.runFromMenu("ZOOM W") })
+        zoom.addItem(ClosureMenuItem(title: "Previous", keyEquivalent: "") { [weak self] in self?.restorePreviousView() })
+        let zoomItem = NSMenuItem(title: "Zoom", action: nil, keyEquivalent: ""); zoomItem.submenu = zoom; menu.addItem(zoomItem)
+        menu.addItem(.separator())
+        _ = item("Drafting Settings…") { [model] in model.showDraftingSettings = true }
+        return menu
     }
-}
-private final class CanvasOverlay: NSView {
-    weak var canvas: DrawingCanvas?
-    override var isOpaque: Bool { false }
-    override func draw(_ dirtyRect: NSRect) { canvas?.drawOverlay() }
-}
-struct CanvasHost: NSViewRepresentable {
-    @ObservedObject var model: EditorModel
-    func makeNSView(context: Context) -> DrawingCanvas { DrawingCanvas(model:model) }
-    func updateNSView(_ view: DrawingCanvas, context: Context) {}
 }
 
-private extension NSAffineTransform {
-    static func rotate(_ degrees: Double) { let t = NSAffineTransform(); t.rotate(byDegrees:degrees); t.concat() }
+/// A transparent layer whose drawing is supplied by the canvas.
+final class CanvasLayerView: NSView {
+    var draw: (() -> Void)?
+    override var isOpaque: Bool { false }
+    override var isFlipped: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) { draw?() }
+}
+
+/// Menu item that runs a closure, for context menus built on demand.
+final class ClosureMenuItem: NSMenuItem {
+    private let handler: () -> Void
+    init(title: String, keyEquivalent: String, action: @escaping () -> Void) {
+        handler = action
+        super.init(title: title, action: #selector(run), keyEquivalent: keyEquivalent)
+        target = self
+    }
+    required init(coder: NSCoder) { fatalError("init(coder:) is not used") }
+    @objc private func run() { handler() }
+}
+
+struct CanvasHost: NSViewRepresentable {
+    let model: EditorModel
+    func makeNSView(context: Context) -> DrawingCanvas { DrawingCanvas(model: model) }
+    func updateNSView(_ view: DrawingCanvas, context: Context) {}
 }

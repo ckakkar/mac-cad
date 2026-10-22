@@ -2,9 +2,9 @@ import Foundation
 
 /// Transient prompts only. Rust remains the owner of geometry, selection and undo.
 struct CommandSession {
-    enum Stage { case idle, selection, points, polygonSides, polygonMode, radius, angle, factor, distance, offsetSide, filletRadius, chamferFirst, chamferSecond, textHeight, textRotation, textValue, mirrorDelete, zoom, values, blockName, insertName, insertScale, insertAngle }
+    enum Stage { case idle, selection, points, polygonSides, polygonMode, radius, angle, factor, distance, offsetSide, filletRadius, chamferFirst, chamferSecond, textHeight, textRotation, textValue, mirrorDelete, zoom, values, blockName, insertName, insertScale, insertAngle, grip, matchSource }
     enum Effect {
-        case command(String), undoLine(UInt64), add([String:Any]), clearSelection, selectAll, selectLast, selectPrevious
+        case command(String), undoLine(UInt64), add([String:Any]), grip(UInt64, Int, CADPoint), clearSelection, selectAll, selectLast, selectPrevious
         case fit, zoom(Double), zoomWindow(CADBounds), previousView, measure(CADPoint,CADPoint)
     }
     var tool: Tool = .select
@@ -25,14 +25,17 @@ struct CommandSession {
     var circumscribed = false
     var closed = false
     var text = ""
+    var hotGrip: CADGrip?
+    var sourceID: UInt64?
     var active: Bool { stage != .idle }
-    var selecting: Bool { stage == .selection }
+    var selecting: Bool { stage == .selection || stage == .matchSource }
     var acceptsSpaces: Bool { stage == .textValue }
     var base: CADPoint? { points.last }
     var prompt: String {
         switch stage {
         case .idle: return "Command:"
-        case .selection: return "\(name) Select objects [All/Last/Previous] · Return to accept:"
+        case .selection: return "\(name) Select \(name == "MATCHPROP" ? "destination objects" : "objects") [All/Last/Previous] · Return to accept:"
+        case .matchSource: return "MATCHPROP Select source object:"
         case .polygonSides: return "POLYGON Number of sides <\(defaults.sides)>:"
         case .polygonMode: return "POLYGON [Inscribed/Circumscribed] <\(circumscribed ? "C" : "I")>:"
         case .radius: return "CIRCLE \(diameter ? "Diameter" : "Radius [Diameter]") <\(diameter ? defaults.radius*2:defaults.radius)>:"
@@ -52,6 +55,7 @@ struct CommandSession {
         case .insertName:return "INSERT Enter block name (one word):"
         case .insertScale:return "INSERT Scale <1>:"
         case .insertAngle:return "INSERT Rotation <0>:"
+        case .grip:return "** STRETCH ** Specify stretch point or [eXit]:"
         case .values:
             let labels = tool == .arrayRect ? ["Rows <2>","Columns <2>","Column spacing <100>","Row spacing <100>"]:["Number of items <6>","Angle to fill <360>"]
             return name+" "+labels[min(parameters.count,labels.count-1)]+":"
@@ -71,7 +75,7 @@ struct CommandSession {
             }
         }
     }
-    mutating func reset() { tool = .select; stage = .idle; name = ""; points = [];parameters = [];lineRevisions = [] }
+    mutating func reset() { tool = .select; stage = .idle; name = ""; points = [];parameters = [];lineRevisions = [];hotGrip = nil;sourceID = nil }
     mutating func start(_ tool:Tool, name:String, selected:Int) -> [Effect] {
         reset(); self.tool = tool; self.name = name
         circlePoints = 0; diameter = false; centerMode = false; circumscribed = false; closed = false
@@ -91,6 +95,15 @@ struct CommandSession {
         return []
     }
     mutating func startZoom() { reset();name = "ZOOM"; stage = .zoom }
+    /// A hot grip behaves like AutoCAD's STRETCH grip mode; the grip is the base point.
+    /// MATCHPROP: pick a source object, then destination objects.
+    mutating func startMatchProperties() -> [Effect] { reset();name = "MATCHPROP";stage = .matchSource;return [.clearSelection] }
+    /// Advances MATCHPROP once a source object has been picked.
+    mutating func selectionChanged(_ selection:[UInt64]) -> [Effect] {
+        guard stage == .matchSource,let source = selection.first else {return []}
+        sourceID = source;stage = .selection;return [.clearSelection]
+    }
+    mutating func startGrip(_ grip:CADGrip) { reset();name = "STRETCH";stage = .grip;hotGrip = grip;points = [grip.point] }
     mutating func respond(_ raw:String, cursor:CADPoint, selected:Int) throws -> [Effect] {
         let input = raw.trimmingCharacters(in:.whitespacesAndNewlines)
         let word = input.uppercased()
@@ -103,9 +116,18 @@ struct CommandSession {
             let shape:[String:Any] = ["kind":"text","at":points[0].json,"text":raw.replacingOccurrences(of:"\\P",with:"\n"),"height":defaults.height,"rotation":defaults.rotation * .pi/180]
             reset();return [.add(shape)]
         }
+        if stage == .grip {
+            if ["","X","EXIT"].contains(word) {reset();return []}
+            guard let p = Self.coordinate(input,base:base) else {throw CoreError.message("Specify a stretch point, or enter eXit")}
+            return try point(p,selected:selected)
+        }
         if stage == .blockName || stage == .insertName {
             guard !input.isEmpty,!input.contains(where:{$0.isWhitespace}),!input.hasPrefix("*") else{throw CoreError.message("Enter a nonempty block name without spaces or an initial asterisk")}
             text = input;stage = .points;return []
+        }
+        if stage == .matchSource {
+            guard input.isEmpty else {throw CoreError.message("Pick the source object on the canvas")}
+            reset();return []
         }
         if stage == .selection {
             if ["A","ALL"].contains(word) { return [.selectAll] }
@@ -117,6 +139,7 @@ struct CommandSession {
             if tool == .arrayRect {stage = .values;return []}
             if tool == .block {stage = .blockName;return []}
             if name == "SELECT" {reset();return []}
+            if name == "MATCHPROP",let source = sourceID {let c = "MATCHPROP \(source)";reset();return [.command(c),.clearSelection]}
             if tool == .offset {stage = .offsetSide;return []}
             if tool == .fillet { let c = "FILLET \(defaults.fillet)";reset();return [.command(c),.clearSelection] }
             if tool == .chamfer { let c = "CHAMFER \(defaults.chamferA) \(defaults.chamferB)";reset();return [.command(c),.clearSelection] }
@@ -246,6 +269,7 @@ struct CommandSession {
         guard tool != .pan else{throw CoreError.message("Drag to pan; press Return/Space to finish")}
         guard p.x.isFinite,p.y.isFinite,abs(p.x)<=1e12,abs(p.y)<=1e12 else {throw CoreError.message("Invalid coordinate")}
         if stage == .offsetSide {return [.command("OFFSET \(defaults.distance) \(p.command)")]}
+        if stage == .grip,let grip = hotGrip {reset();return [.grip(grip.id,grip.index,p)]}
         if stage == .radius {return try scalar(points[0].distance(p)*(diameter ? 2:1),selected:selected)}
         if stage == .angle {let d = p-points[0];return try scalar(atan2(d.y,d.x)*180 / .pi,selected:selected)}
         guard stage == .points else {throw CoreError.message("Complete the displayed value or selection prompt first")}
@@ -303,6 +327,12 @@ struct CommandSession {
         }
         if let command {reset();return [.command(command)]}
         return []
+    }
+    /// Clickable keywords in a prompt's `[A/B/C]` list, as in AutoCAD's command line.
+    static func options(in prompt:String) -> (lead:String,options:[String],tail:String) {
+        guard let open = prompt.firstIndex(of:"["),let close = prompt[open...].firstIndex(of:"]") else {return (prompt,[],"")}
+        let options = prompt[prompt.index(after:open)..<close].split(separator:"/").map{String($0)}
+        return (String(prompt[..<open]),options,String(prompt[prompt.index(after:close)...]))
     }
     static func coordinate(_ raw:String,base:CADPoint?) -> CADPoint? {
         var input = raw.trimmingCharacters(in:.whitespaces)

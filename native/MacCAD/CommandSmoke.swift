@@ -90,6 +90,71 @@ import AppKit
         await joined.waitForIdle();try require(joined.entityCount == 1,"JOIN must accept selection after invocation")
         for input in ["X","A",""]{joined.execute(input)}
         await joined.waitForIdle();try require(joined.entityCount == 2,"EXPLODE must accept selection after invocation")
+        try await nativeWorkflows(require)
         print("Command workflows passed: Space/Return, repeat, selection-first/command-first, line Close/Undo, polar input, circle options, error recovery, text spaces/rotation, polygon, tool interruption, zoom, offset side, cancellation, function keys, completion and field-editor isolation.")
+        print("Native workflows passed: hot grips, grip cancel, MATCHPROP, Edit Undo inside LINE, undo titles, prompt options, autocomplete, circle diameter menu, layer rename.")
+    }
+
+    /// Workflows behind the native workspace: grips, menus, inspector and command line.
+    static func nativeWorkflows(_ require: (Bool, String) throws -> Void) async throws {
+        func entity(_ model: EditorModel, _ id: Int) async throws -> [String: Any] {
+            let d = try await model.core.request(["op": "serialize"])
+            return (d["entities"] as? [String: [String: Any]])?[String(id)] ?? [:]
+        }
+        let grips = EditorModel(core: CADCore()); await grips.refresh()
+        grips.execute("LINE 0,0 100,0"); grips.operation(["op": "select", "ids": [1]]); await grips.waitForIdle()
+        try require(grips.grips.count == 3, "A selected line must expose endpoint and midpoint grips")
+        grips.startGrip(grips.grips[1]); await grips.waitForIdle()
+        try require(grips.session.stage == .grip && grips.session.prompt.contains("STRETCH"), "Clicking a grip must make it hot")
+        grips.execute("@0,50"); await grips.waitForIdle()
+        let stretched = try await entity(grips, 1)["b"] as? [String: Double]
+        try require(stretched?["x"] == 100 && stretched?["y"] == 50, "Relative input must stretch from the hot grip")
+        try require(grips.undoLabel == "Grip Edit" && grips.selection == [1] && !grips.session.active, "Grip edits must be undoable and keep the selection")
+        grips.startGrip(grips.grips[0]); grips.cancel(); await grips.waitForIdle()
+        try require(!grips.session.active && grips.selection == [1], "Escape must cool a hot grip without deselecting")
+        grips.undo(); await grips.waitForIdle()
+        let restored = try await entity(grips, 1)["b"] as? [String: Double]
+        try require(restored?["y"] == 0, "Undo must restore the stretched grip")
+
+        let match = EditorModel(core: CADCore()); await match.refresh()
+        match.layer("Walls", values: ["create": true]); match.execute("LINE 0,0 10,0")
+        match.layer("0", values: ["current": true]); match.execute("LINE 0,10 10,10")
+        match.execute("MA"); await match.waitForIdle()
+        try require(match.session.stage == .matchSource && match.selecting, "MATCHPROP must ask for a source object")
+        match.operation(["op": "pick", "point": ["x": 5.0, "y": 0.0], "tolerance": 1.0, "extend": true, "mode": "add"]); await match.waitForIdle()
+        try require(match.session.stage == .selection && match.selection.isEmpty, "Picking a source must advance to destination selection")
+        match.operation(["op": "pick", "point": ["x": 5.0, "y": 10.0], "tolerance": 1.0, "extend": true, "mode": "add"])
+        match.execute(""); await match.waitForIdle()
+        let destination = try await entity(match, 2)
+        try require(destination["layer"] as? String == "Walls" && !match.session.active, "MATCHPROP must copy the source layer to destinations")
+
+        let lines = EditorModel(core: CADCore()); await lines.refresh()
+        for input in ["L", "0,0", "10,0", "20,0"] { lines.execute(input) }
+        await lines.waitForIdle()
+        lines.undo(); await lines.waitForIdle()
+        try require(lines.entityCount == 1 && lines.tool == .line && lines.session.points.count == 2, "Edit ▸ Undo inside LINE must remove only the last segment")
+        lines.cancel(); lines.undo(); await lines.waitForIdle()
+        try require(lines.entityCount == 0 && lines.redoLabel == "Line", "Edit ▸ Undo outside a command must undo the last change")
+
+        let document = DrawingDocument()
+        document.editor.execute("CIRCLE 0,0 5"); await document.editor.waitForIdle()
+        let undoItem = NSMenuItem(title: "Undo", action: #selector(DrawingDocument.undoCommand(_:)), keyEquivalent: "z")
+        try require(document.validateUserInterfaceItem(undoItem) && undoItem.title == "Undo Circle", "Edit ▸ Undo must name the action it undoes")
+        let copyItem = NSMenuItem(title: "Copy", action: #selector(DrawingDocument.copy(_:)), keyEquivalent: "c")
+        try require(!document.validateUserInterfaceItem(copyItem), "Copy must be disabled without a selection")
+
+        let parts = CommandSession.options(in: "LINE Specify next point [Close/Undo] · Return to finish:")
+        try require(parts.options == ["Close", "Undo"] && parts.lead.hasPrefix("LINE"), "Prompt options must parse into clickable keywords")
+        try require(CommandCatalog.suggestions(for: "L").first == "LINE" && CommandCatalog.suggestions(for: "co").first == "COPY" && CommandCatalog.suggestions(for: "0,0").isEmpty, "Autocomplete must rank alias targets first and ignore coordinates")
+
+        let circle = EditorModel(core: CADCore()); await circle.refresh()
+        circle.choose(.circle, option: "__DIAMETER"); await circle.waitForIdle()
+        circle.enterPoint(.zero); await circle.waitForIdle()
+        try require(circle.session.stage == .radius && circle.session.prompt.contains("Diameter"), "Circle ▸ Center, Diameter must prompt for a diameter")
+        circle.execute("40"); await circle.waitForIdle()
+        try require(try await entity(circle, 1)["radius"] as? Double == 20, "A 40 unit diameter must make a 20 unit radius")
+
+        circle.layer("Walls", values: ["create": true]); circle.layer("Walls", values: ["rename": "A-WALL"]); await circle.waitForIdle()
+        try require(circle.layers.contains { $0.name == "A-WALL" } && circle.currentLayer == "A-WALL", "Layer rename must update the palette and current layer")
     }
 }

@@ -12,6 +12,11 @@ workflows (Space/Return, repetition, selection, numeric input, options, cancella
 text and compound objects). It exercises NSDocument safe saves/reopen, recovery payloads, scene buffers, the
 Metal pipeline, PDF and bundled DWG imports using upstream 2000/2013/2018 fixtures.
 
+Builds use the Command Line Tools toolchain, which ships the Observation macro
+plugin but not SwiftUI's. SwiftUI's `@State` resolves to a macro in current SDKs, so
+views use the `ViewState` alias of the identical property wrapper (see
+`Settings.swift`); `@FocusState`, `@AppStorage` and `@Bindable` work directly.
+
 Test UI changes in the actual app: gestures/numeric input, cancellation, selection,
 undo/redo, multiple windows, layer/property edits, both appearances and PDF output.
 Fixtures must be generated or redistributable. Record limitations in

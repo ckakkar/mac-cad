@@ -38,10 +38,20 @@ boundaries and support `solid` or `diagonal`.
 
 ## Select and edit
 
-Click adds objects; Shift-click removes them. Drag left-to-right for objects entirely inside
-the window; drag right-to-left for crossing objects. Use Properties to edit shape
-parameters, layer and style. ⌘A selects visible unlocked objects. ⌘C/⌘X/⌘V copies,
-cuts and pastes MacCAD objects between documents; pasted objects shift by 150 units.
+Click adds objects; Shift-click removes them. The object under the pickbox
+highlights before you click. Drag left-to-right for objects entirely inside the
+window (blue); drag right-to-left for crossing objects (green, dashed). Use Properties
+to edit shape parameters, layer and style; double-click an object to select it and
+show Properties. ⌘A selects visible unlocked objects. ⌘C/⌘X/⌘V copies, cuts and
+pastes MacCAD objects between documents; pasted objects shift by 150 units.
+
+Selected objects show blue grips between commands. Click a grip to make it hot (red),
+then click, snap or type a point to stretch it: `@0,500` moves the grip relative to
+itself. Line and straight polyline-segment midpoints move the segment; arc and bulged
+segment midpoints reshape the curve; circle quadrants change the radius; centers and
+insertion points move the object. Escape cools the grip and keeps the selection.
+Grip edits are single undo steps (“Undo Grip Edit”). Only one grip can be hot, and
+AutoCAD's Space-cycled grip modes (move/rotate/scale/mirror) are not implemented.
 
 Full numeric commands below use the current selection. Bare command names
 can also prompt for selection after invocation:
@@ -82,28 +92,37 @@ supported compound objects into simpler geometry. Nested definition shapes inher
 insertion properties.
 
 `CHPROP color #FF8800`, `CHPROP linetype Dashed`, `CHPROP lineweight 0.5` and
-`CHPROP layer Walls` set selection properties. `MATCHPROP 1` uses an existing object
-ID as the style source. `SELECTSIMILAR` matches selected shape types and layers.
+`CHPROP layer Walls` set selection properties. `MA` (MATCHPROP) asks for a source
+object, then destination objects, and copies its layer and style; `MATCHPROP 1` still
+uses an object ID directly. `SELECTSIMILAR` matches selected shape types and layers.
 `OVERKILL` removes exact duplicates; `PURGE` removes unused blocks/layers.
 `AREA` / `LIST` reports selection length/area; curves can use sampled approximations.
 
 ## Layers, drawing aids and files
 
-The inspector creates/selects layers and controls visibility, locking, color,
-linetype and weight. `LAYISO` isolates selected objects' layers; `LAYUNISO` currently
-shows all layers rather than restoring a previous isolation state. `LAYON`,
-`LAYOFF`, `LAYLOCK`, `LAYUNLOCK` and `LAYMCUR` are also available.
+The Layers inspector (⌘4) creates, renames and deletes empty layers, sets the
+current layer (double-click a row), turns layers on/off (lightbulb), locks them, and
+edits color, linetype and lineweight; right-click a layer to isolate it. The toolbar's
+layer menu also sets the current layer. `LAYISO` isolates selected objects' layers;
+`LAYUNISO` currently shows all layers rather than restoring a previous isolation
+state. `LAYON`, `LAYOFF`, `LAYLOCK`, `LAYUNLOCK` and `LAYMCUR` are also available.
 
-F3 toggles object snaps and F8 toggles ortho; polar and grid controls sit below
-the canvas. Analytic intersection/perpendicular/tangent snaps apply to lines,
-circles and arcs. ⌘0 fits the drawing. Use two-finger pan/pinch or wheel zoom and
-Option-drag pan.
+The status bar toggles grid, snap, ortho, polar tracking, object snap, dynamic input
+and lineweight display; the arrows beside Snap, Polar and Osnap open their settings.
+Object snaps show AutoCAD's marker shapes (square endpoint, triangle midpoint, circle
+center, diamond quadrant, X intersection…) with a name tooltip. Analytic
+intersection/perpendicular/tangent snaps apply to lines, circles and arcs. Use
+two-finger pan/pinch or wheel zoom and Option- or middle-drag pan; a two-finger
+double-tap toggles between the drawing extents and the previous view.
 
 Save as `.maccad` for editable native geometry. Open DXF/DWG to import a new native
 drawing and review all warnings. Exporting DXF flattens some annotations/fills;
-DWG writing is unavailable. Export Scaled PDF lets you choose paper, orientation,
-scale or Fit, color and selection-only output. Plot at actual size when printing
-an exact-scale PDF; printer Fit-to-page changes its scale.
+DWG writing is unavailable. File ▸ Print (⌘P) uses the macOS print panel: choose the
+printer or PDF, paper and orientation, and in the Plot section the plot area
+(Extents, Selection or Display), scale (Fit to Paper or 1:N in drawing units),
+monochrome or drawing colors and lineweights. Page Setup is ⇧⌘P. File ▸ Export ▸ PDF
+writes a PDF directly at a chosen paper size and scale. Keep printer scaling at 100%
+for exact-scale output.
 
 See [COMPATIBILITY.md](docs/COMPATIBILITY.md) for detailed exchange and tool limits.
 
@@ -175,7 +194,9 @@ Other prompted sequences:
 
 `Z` → `E`, `W` or `P` zooms to extents, a two-point window, or the previous view.
 `ZOOM 2X` doubles zoom. `P` starts drag-to-pan; Return/Space ends it. Middle-drag
-pans; double middle-click fits. Right-click opens an Enter/Repeat, Cancel, Undo menu.
+pans; double middle-click fits. Right-click opens a context menu: during a command
+it offers Enter, Cancel and the prompt's options; otherwise Repeat, Recent Input,
+selection edits, clipboard, named Undo/Redo, Pan, Zoom and Drafting Settings.
 
 Up/Down cycles input history and restores your draft when returning to the newest
 entry. Tab/Shift-Tab cycles command completions. Ctrl-J / Ctrl-M also accepts/repeats.
@@ -183,7 +204,34 @@ F2 controls history, F3 object snaps, F7 grid display, F8 ortho, F9 grid snap, F
 polar and F12 cursor input. `SNAP 100` sets grid-snap spacing; GRID/SNAP/OSNAP/ORTHO/
 POLAR/DYNMODE accept ON/OFF (this is a small settings subset, not full system-variable
 compatibility). Cmd-1/3/4/5/6 toggles tools/command window/layers/properties/status;
-Cmd-R regenerates and Cmd-+/− zooms. Fn may be needed for function keys on Mac.
+Cmd-0 toggles Clean Screen, Shift-Cmd-H hides all palettes, Cmd-R regenerates and
+Cmd-= / Cmd-− zooms. Fn may be needed for function keys on Mac.
 
 The [parity audit](docs/AUTOCAD_PARITY.md) lists missing AutoCAD behaviors and
 features; this workflow update does not establish full product parity.
+
+## Native workspace (0.4)
+
+Each drawing is a macOS document window; additional drawings open as window tabs
+(Window ▸ Merge All Windows and the tab bar work as in other Mac apps). The unified
+toolbar holds Tool Sets/inspector toggles, Undo/Redo, Draw and Modify tools, the
+current layer and Print; View ▸ Customize Toolbar adds any drafting tool or aid. The
+Tool Sets sidebar filters tools by name, command or alias and remembers collapsed
+groups. The inspector's Properties tab uses AutoCAD's property names (Start X,
+Radius, Total angle…), shows `*VARIES*` for mixed selections and steps through
+polyline vertices; its Layers tab manages layers.
+
+The command line shows the live prompt; bracketed options such as `[Close/Undo]` are
+buttons. Typing a command shows an autocomplete list (alias targets first, e.g. `L`
+→ LINE); Up/Down choose from it, otherwise they walk input history. The last three
+history lines stay visible; F2 opens the full history over the canvas. With dynamic
+input on, the prompt follows the crosshair, an input box appears once you type, and
+rubber bands show distance and angle.
+
+MacCAD ▸ Settings (⌘,) sets the model space background (dark or light; white
+objects display black on light), the UCS icon, crosshair size, pickbox, grip and
+aperture sizes, AutoSnap marker/tooltip, selection preview and running object snap
+modes. Drafting Settings (`DS`, `SE` or `OS`) sets this window's snap spacing and
+grid/snap/ortho/polar/object snap/dynamic input switches, plus the app-wide polar
+increment (5–90°) and running object snap modes. Snap spacing is not saved in the
+drawing yet. Drawing Units (`UN`) changes units without rescaling.

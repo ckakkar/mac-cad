@@ -74,6 +74,25 @@ final class CADCore: @unchecked Sendable {
     /// its queue; editing/scene work cannot race serialization.
     func requestSync(_ payload: [String: Any]) throws -> [String: Any] { try queue.sync { try perform(payload) } }
 
+    /// Synchronous scene for AppKit callbacks such as print operations.
+    func sceneSync(bounds: CADBounds, tolerance: Double) throws -> Scene {
+        try queue.sync { [self] in
+            guard let batch = cad_render_plain(handle,bounds.min.x,bounds.min.y,bounds.max.x,bounds.max.y,tolerance) else { throw CoreError.message("Unable to render drawing") }
+            defer { cad_batch_free(batch) }
+            return try Self.read(batch)
+        }
+    }
+    private static func read(_ batch: OpaquePointer) throws -> Scene {
+        var count = 0
+        var result = Scene()
+        if let p = cad_batch_segments(batch, &count) { result.segments = Array(UnsafeBufferPointer(start: p, count: count)) }
+        if let p = cad_batch_triangles(batch, &count) { result.triangles = Array(UnsafeBufferPointer(start: p, count: count)) }
+        if let text = cad_batch_labels(batch) {
+            defer { cad_string_free(text) }
+            result.labels = try JSONDecoder().decode([CADLabel].self, from: Data(String(cString: text).utf8))
+        }
+        return result
+    }
     func scene(bounds: CADBounds, tolerance: Double, highlight:Bool = true) async throws -> Scene {
         try await withCheckedThrowingContinuation { continuation in
             queue.async { [self] in
@@ -82,16 +101,7 @@ final class CADCore: @unchecked Sendable {
                     continuation.resume(throwing: CoreError.message("Unable to render drawing")); return
                 }
                 defer { cad_batch_free(batch) }
-                var count = 0
-                var result = Scene()
-                if let p = cad_batch_segments(batch, &count) { result.segments = Array(UnsafeBufferPointer(start: p, count: count)) }
-                if let p = cad_batch_triangles(batch, &count) { result.triangles = Array(UnsafeBufferPointer(start: p, count: count)) }
-                if let text = cad_batch_labels(batch) {
-                    defer { cad_string_free(text) }
-                    do { result.labels = try JSONDecoder().decode([CADLabel].self, from: Data(String(cString: text).utf8)) }
-                    catch { continuation.resume(throwing: error); return }
-                }
-                continuation.resume(returning: result)
+                continuation.resume(with: Result { try Self.read(batch) })
             }
         }
     }

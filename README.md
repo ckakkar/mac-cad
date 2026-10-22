@@ -17,38 +17,46 @@ See the [compatibility matrix](docs/COMPATIBILITY.md) and [AutoCAD parity audit]
 
 ## Drawing
 
-The workspace combines native document windows and menus with grouped Draw,
-Modify and Annotation tools, a Metal canvas, a command bar and a properties/layers
-inspector. Open the example plan from an empty document to try it.
+Each drawing opens in a native document window (and window tab) laid out like
+AutoCAD for Mac: a Tool Sets sidebar, model space with an AutoCAD-style crosshair,
+a command line with clickable prompt options, a status bar of drafting aids, and a
+Properties/Layers inspector, under a customizable unified toolbar. The menu bar
+follows AutoCAD for Mac's order and its published Mac shortcuts. Open the example
+plan from an empty drawing to try it.
 
 - Draw lines, bulged polylines, rectangles, polygons, circles, arcs, ellipses,
   control-point splines, points, text, basic dimensions, leaders and convex hatches.
 - Move, copy, rotate, scale, mirror, offset, trim, extend, fillet, chamfer, join,
-  break, stretch, array and explode objects. Edit geometry, color, linetype,
-  lineweight and layer in Properties. Changes participate in undo/redo.
-- Click adds to selection; Shift-click removes. Drag left to right for a containing
-  window, or right to left for crossing selection. Hidden/locked objects are excluded.
-- Enter a tool name (`LINE`, `CIRCLE`, etc.) and press **Space or Return**, then click or enter `x,y` coordinates,
-  `@dx,dy` relative coordinates, `@distance<angle` polar input, or scalar values. Full numeric commands
-  work too: `LINE 0,0 3000,0`, `ROTATE 0,0 90`.
-- Up/Down recalls command history; Tab completes names. Escape cancels a gesture;
-  Return/Space finishes a path and repeats the last command when idle. Annotation
-  prompts retain spaces. ⌘3 toggles the command window; ⌘5 toggles Properties.
-- Trackpad: two-finger pan, pinch to zoom. Mouse: wheel zoom, Option-drag pan.
-  ⌘0 fits the drawing. F3 toggles object snaps; F8 toggles ortho; F12 toggles
-  editable cursor input. F2/F7/F9/F10 control history/grid/grid snap/polar.
+  break, stretch, array and explode objects, with dragged previews. Edit geometry,
+  color, linetype, lineweight and layer in Properties. Changes participate in
+  undo/redo, and Edit ▸ Undo names the action (“Undo Move”).
+- Select objects to show grips; click a grip and pick or type a point to stretch it.
+  Objects under the pickbox highlight before you click. Click adds to selection;
+  Shift-click removes. Drag left to right for a window, right to left for crossing.
+- Type a command anywhere over the canvas (`L`, `CIRCLE`, …) and press **Space or
+  Return**; an autocomplete list appears as you type. Then click or enter `x,y`,
+  `@dx,dy`, `@distance<angle` or values. Full numeric commands work too:
+  `LINE 0,0 3000,0`, `ROTATE 0,0 90`.
+- Object snaps show AutoCAD's marker shapes and names; choose running modes from
+  the status bar Osnap menu or Drafting Settings (`DS`). F3 object snap, F7 grid,
+  F8/⌘L ortho, F9/⌘B snap, F10/⌘U polar, F12/⇧⌘D dynamic input, F2 history.
+- ⌘1 Tool Sets, ⌘3 command line, ⌘4 Layers, ⌘5/⌘I Properties, ⌘6 status bar,
+  ⌘0 Clean Screen, ⇧⌘H all palettes, ⌘, Settings, ⌘P Print, ⇧⌘P Page Setup.
+- Trackpad: two-finger pan, pinch to zoom, two-finger double-tap for extents. Mouse:
+  wheel zoom, middle or Option-drag pan. `Z` `E` zooms to extents; ⌘= / ⌘− zoom.
 - ⌘Z / ⇧⌘Z undo/redo; ⌘A selects editable objects; ⌘C/⌘X/⌘V copy/cut/paste
   MacCAD objects between drawings. Units are explicit; changing units does not rescale.
 
 Modify commands accept preselection or prompt for objects after invocation.
-The question-mark button opens the command reference. See [USAGE.md](USAGE.md)
+Help ▸ Command Reference lists numeric command forms. See [USAGE.md](USAGE.md)
 for examples and the limits of each editing operation.
 
 Save editable work as `.maccad`. Version 2 documents retain geometry and properties;
-version 1 documents migrate on opening. AppKit coordinates safe saves and autosave.
-Export DXF produces an explicitly limited R2013 subset. Export Scaled PDF offers
-A4–A0, Letter, Legal and Tabloid, orientation, exact scale or Fit, drawing colors or
-monochrome, and optional selection-only output with plotted lineweights.
+version 1 documents migrate on opening. AppKit coordinates safe saves, autosave and
+versions. Export DXF produces an explicitly limited R2013 subset. File ▸ Print plots
+through the macOS print panel (printer or PDF) with plot area, scale, plot style and
+lineweight options; File ▸ Export ▸ PDF offers A4–A0, Letter, Legal and Tabloid,
+orientation, exact scale or Fit, colors or monochrome, and selection-only output.
 
 ## DXF and DWG
 

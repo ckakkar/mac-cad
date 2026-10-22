@@ -45,6 +45,7 @@ struct Change {
     settings: Option<(Settings, Settings)>,
     before_revision: u64,
     after_revision: u64,
+    label: String,
 }
 
 pub struct Engine {
@@ -57,6 +58,8 @@ pub struct Engine {
     next_revision: u64,
     saved_revision: u64,
     pub diagnostics: Vec<String>,
+    /// Name of the action being dispatched, recorded with its undo step.
+    label: String,
 }
 impl Default for Engine {
     fn default() -> Self {
@@ -77,6 +80,7 @@ impl Engine {
             next_revision: 1,
             saved_revision: 0,
             diagnostics: Vec::new(),
+            label: String::new(),
         };
         e.reindex();
         Ok(e)
@@ -277,6 +281,11 @@ impl Engine {
             settings: old_settings.zip(settings),
             before_revision: self.revision,
             after_revision: self.next_revision,
+            label: if self.label.is_empty() {
+                "Edit".into()
+            } else {
+                self.label.clone()
+            },
         };
         self.revision = self.next_revision;
         self.next_revision += 1;
@@ -387,9 +396,10 @@ impl Engine {
         Ok(())
     }
     pub fn state(&self) -> Value {
-        json!({"revision":self.revision,"dirty":self.revision!=self.saved_revision,"count":self.doc.entities.len(),"selected":self.selected,"layers":self.doc.layers,"current_layer":self.doc.current_layer,"units":self.doc.units,"bounds":self.bounds(),"can_undo":!self.undo.is_empty(),"can_redo":!self.redo.is_empty(),"diagnostics":self.diagnostics,"blocks":self.doc.blocks.keys().collect::<Vec<_>>(),"selection":self.selected.iter().take(100).filter_map(|id|self.doc.entities.get(id)).collect::<Vec<_>>()})
+        json!({"revision":self.revision,"dirty":self.revision!=self.saved_revision,"count":self.doc.entities.len(),"selected":self.selected,"layers":self.doc.layers,"current_layer":self.doc.current_layer,"units":self.doc.units,"bounds":self.bounds(),"can_undo":!self.undo.is_empty(),"can_redo":!self.redo.is_empty(),"diagnostics":self.diagnostics,"blocks":self.doc.blocks.keys().collect::<Vec<_>>(),"selection":self.selected.iter().take(100).filter_map(|id|self.doc.entities.get(id)).collect::<Vec<_>>(),"grips":self.selection_grips(),"undo_label":self.undo.last().map(|c|&c.label),"redo_label":self.redo.last().map(|c|&c.label)})
     }
     pub fn dispatch(&mut self, v: Value) -> Result<Value, String> {
+        self.label = action_label(&v);
         if let Some(result) = self.drafting_dispatch(&v) {
             return result;
         }
@@ -405,6 +415,34 @@ impl Engine {
                 }
                 self.undo(false)?;
                 Ok(self.state())
+            }
+            "grip" => {
+                let id = v["id"].as_u64().ok_or("Missing grip object")?;
+                let index = v["index"].as_u64().ok_or("Missing grip index")? as usize;
+                let to: Point =
+                    serde_json::from_value(v["point"].clone()).map_err(|e| e.to_string())?;
+                self.move_grip(id, index, to)?;
+                Ok(self.state())
+            }
+            "grip_preview" => {
+                let id = v["id"].as_u64().ok_or("Missing grip object")?;
+                let index = v["index"].as_u64().ok_or("Missing grip index")? as usize;
+                let to: Point =
+                    serde_json::from_value(v["point"].clone()).map_err(|e| e.to_string())?;
+                let tol = v["tolerance"].as_f64().unwrap_or(0.1);
+                if !tol.is_finite() || tol <= 0.0 {
+                    return Err("Invalid preview tolerance".into());
+                }
+                Ok(json!({"segments":self.grip_preview(id, index, to, tol)}))
+            }
+            "hover" => {
+                let p: Point =
+                    serde_json::from_value(v["point"].clone()).map_err(|e| e.to_string())?;
+                let tol = v["tolerance"].as_f64().unwrap_or(10.0);
+                if !p.finite() || !tol.is_finite() || tol <= 0.0 {
+                    return Err("Invalid hover point/tolerance".into());
+                }
+                Ok(json!({"id":self.pick(p, tol)}))
             }
             "add" => {
                 let shapes: Vec<Shape> =
@@ -482,7 +520,12 @@ impl Engine {
                 if base.is_some_and(|b| !b.finite()) {
                     return Err("Invalid snap base".into());
                 }
-                Ok(self.precise_snap(p, tol, base))
+                let modes = v["modes"].as_array().map(|m| {
+                    m.iter()
+                        .filter_map(|k| k.as_str().map(String::from))
+                        .collect::<Vec<_>>()
+                });
+                Ok(self.precise_snap_modes(p, tol, base, modes.as_deref()))
             }
             "serialize" => serde_json::to_value(&self.doc).map_err(|e| e.to_string()),
             "load" => {
@@ -500,7 +543,40 @@ impl Engine {
             "layer" => {
                 let name = v["name"].as_str().ok_or("Missing layer")?;
                 let mut settings = Settings::of(&self.doc);
+                if let Some(new) = v["rename"].as_str() {
+                    return self.rename_layer(name, new).map(|_| self.state());
+                }
+                if v["delete"].as_bool() == Some(true) {
+                    if name == "0" || name == self.doc.current_layer {
+                        return Err("Layer 0 and the current layer cannot be deleted".into());
+                    }
+                    if self.doc.entities.values().any(|e| e.layer == name) {
+                        return Err(
+                            "Only empty layers can be deleted; move or erase its objects first"
+                                .into(),
+                        );
+                    }
+                    let before = settings.layers.len();
+                    settings.layers.retain(|l| l.name != name);
+                    if settings.layers.len() == before {
+                        return Err("Unknown layer".into());
+                    }
+                    self.commit(Vec::new(), Vec::new(), Some(settings))?;
+                    return Ok(self.state());
+                }
+                if v["isolate"].as_bool() == Some(true) {
+                    if !settings.layers.iter().any(|l| l.name == name) {
+                        return Err("Unknown layer".into());
+                    }
+                    for l in &mut settings.layers {
+                        l.visible = l.name == name;
+                    }
+                    settings.current_layer = name.into();
+                    self.commit(Vec::new(), Vec::new(), Some(settings))?;
+                    return Ok(self.state());
+                }
                 if v["create"].as_bool() == Some(true) {
+                    valid_layer_name(name)?;
                     if settings.layers.iter().any(|l| l.name == name) {
                         return Err("Layer already exists".into());
                     }
@@ -834,6 +910,119 @@ impl Engine {
             _ => Err(format!("Unknown command: {name}")),
         }
     }
+}
+impl Engine {
+    fn rename_layer(&mut self, name: &str, new: &str) -> Result<(), String> {
+        let new = new.trim();
+        valid_layer_name(new)?;
+        if name == "0" {
+            return Err("Layer 0 cannot be renamed".into());
+        }
+        if new != name && self.doc.layer(new).is_some() {
+            return Err("A layer with that name already exists".into());
+        }
+        let mut settings = Settings::of(&self.doc);
+        let layer = settings
+            .layers
+            .iter_mut()
+            .find(|l| l.name == name)
+            .ok_or("Unknown layer")?;
+        layer.name = new.into();
+        if settings.current_layer == name {
+            settings.current_layer = new.into();
+        }
+        let after = self
+            .doc
+            .entities
+            .values()
+            .filter(|e| e.layer == name)
+            .map(|e| Entity {
+                layer: new.into(),
+                ..e.clone()
+            })
+            .collect();
+        self.commit(after, Vec::new(), Some(settings))
+    }
+}
+fn valid_layer_name(name: &str) -> Result<(), String> {
+    // AutoCAD reserves these characters in symbol-table names.
+    if name.trim().is_empty()
+        || name.len() > 255
+        || name.trim() != name
+        || name
+            .chars()
+            .any(|c| "<>/\\\":;?*|,=`".contains(c) || c.is_control())
+    {
+        return Err(
+            "Layer names need 1–255 characters, without < > / \\ \" : ; ? * | , = `".into(),
+        );
+    }
+    Ok(())
+}
+/// Undo/redo menu name for a request, using AutoCAD's command vocabulary.
+fn action_label(v: &Value) -> String {
+    let op = v["op"].as_str().unwrap_or("");
+    let name = match op {
+        "command" => v["text"]
+            .as_str()
+            .and_then(|t| t.split_whitespace().next())
+            .unwrap_or("")
+            .to_ascii_uppercase(),
+        "add" => v["shapes"][0]["kind"]
+            .as_str()
+            .unwrap_or("")
+            .to_ascii_uppercase(),
+        "layer" => return "Layer Change".into(),
+        "properties" => return "Property Change".into(),
+        "paste" => return "Paste".into(),
+        "grip" => return "Grip Edit".into(),
+        "import_dxf" => return "Import".into(),
+        _ => return String::new(),
+    };
+    let label = match name.as_str() {
+        "L" | "LINE" => "Line",
+        "PL" | "PLINE" | "POLYLINE" => "Polyline",
+        "REC" | "RECT" | "RECTANG" | "RECTANGLE" => "Rectangle",
+        "C" | "CIRCLE" | "CIRCLE2" | "CIRCLE3" => "Circle",
+        "A" | "ARC" | "ARC3" => "Arc",
+        "EL" | "ELLIPSE" => "Ellipse",
+        "SPL" | "SPLINE" => "Spline",
+        "POL" | "POLYGON" => "Polygon",
+        "PO" | "POINT" => "Point",
+        "T" | "TEXT" | "MT" | "MTEXT" => "Text",
+        "DIM" | "DIMLINEAR" | "DIMALIGNED" | "DIMRADIUS" | "DIMDIAMETER" | "DIMENSION"
+        | "RADIAL_DIMENSION" => "Dimension",
+        "LEADER" | "MLEADER" => "Leader",
+        "H" | "HATCH" => "Hatch",
+        "M" | "MOVE" => "Move",
+        "CO" | "CP" | "COPY" => "Copy",
+        "RO" | "ROTATE" => "Rotate",
+        "SC" | "SCALE" => "Scale",
+        "MI" | "MIRROR" => "Mirror",
+        "O" | "OFFSET" => "Offset",
+        "TR" | "TRIM" => "Trim",
+        "EX" | "EXTEND" => "Extend",
+        "F" | "FILLET" => "Fillet",
+        "CHA" | "CHAMFER" => "Chamfer",
+        "J" | "JOIN" => "Join",
+        "BR" | "BREAK" => "Break",
+        "S" | "STRETCH" => "Stretch",
+        "AR" | "ARRAYRECT" | "ARRAYPOLAR" => "Array",
+        "X" | "EXPLODE" => "Explode",
+        "E" | "ERASE" | "DELETE" => "Erase",
+        "BLOCK" => "Block",
+        "I" | "INSERT" => "Insert",
+        "REVERSE" => "Reverse",
+        "CLOSE" => "Close",
+        "OPEN" => "Open",
+        "UNITS" => "Units",
+        "CHPROP" | "MATCHPROP" | "MA" => "Property Change",
+        "OVERKILL" => "Overkill",
+        "PURGE" => "Purge",
+        n if n.starts_with("LAY") => "Layer Change",
+        _ => "",
+    };
+    label.into()
 }
 pub fn parse_number(s: &str) -> Result<f64, String> {
     let n = s

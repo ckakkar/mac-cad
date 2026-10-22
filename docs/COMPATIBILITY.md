@@ -7,10 +7,12 @@ upstream DWG line fixtures exercise the subset; no professional corpus is qualif
 | Capability | Current behavior |
 | --- | --- |
 | Native documents | Version 2 JSON `.maccad`; version 1 migrates; geometry, entity properties, units, layers, static blocks; coordinated saves and autosave |
-| Command workflow | Space/Return accept/repeat, prompted selection and values, Close/Undo, relative/polar input, editable cursor input, history/completion; option coverage is partial |
+| Command workflow | Space/Return accept/repeat, prompted selection and values, clickable prompt options, autocomplete, Close/Undo, relative/polar input, dynamic input beside the crosshair, history/completion; option coverage is partial |
+| Native workspace | Unified customizable toolbar, drawing tabs, Tool Sets sidebar, Properties/Layers inspector, status bar aids, AutoCAD for Mac menu order and shortcuts, Settings and Drafting Settings; no floating palettes or saved workspaces |
 | Drafting | Lines, zero-width bulged polylines, rectangles, regular polygons, circles, center/start/sweep and three-point arcs, points, ellipses |
 | Splines | Rational B-spline evaluation/import; SPLINE creates clamped control-point curves, not fit-point interpolation |
-| Selection | Additive click/Shift removal, containing/crossing windows, All/Last/Previous prompts, select all/similar; hidden/locked layers excluded |
+| Selection | Additive click/Shift removal, containing/crossing windows, selection preview, All/Last/Previous prompts, select all/similar; hidden/locked layers excluded |
+| Grips | One hot grip at a time stretches supported objects with preview, snaps and typed points, through undoable engine edits; no grip MOVE/ROTATE/SCALE/MIRROR modes or multiple hot grips |
 | Transforms | Move/copy/rotate, uniform positive scale, mirror-copy, erase, undo/redo |
 | Offset | Lines, circles, arcs and straight polylines; signed distance, source properties retained; no curved polyline or self-intersection cleanup |
 | Trim/extend | Lines against a supplied infinite line boundary; not general curve/boundary trimming |
@@ -23,10 +25,10 @@ upstream DWG line fixtures exercise the subset; no professional corpus is qualif
 | Text | Basic system-font text and multiline text; MTEXT formatting simplified; no SHX, tables, fields or rich text editor |
 | Dimensions/leaders | Basic horizontal linear, aligned, radius/diameter, simple leader; no associativity, styles or tolerances |
 | Hatches | Convex polygon, solid or diagonal; no holes, associative boundaries or hatch library; no solid DONUT tool |
-| Snaps | End/mid/center/quadrant; analytic line/circle/arc intersections; nearest, perpendicular and tangent with base point; ellipse quadrants and spline ends; no general spline intersections |
-| Layers/properties | Visibility, locking, colors, Continuous/Dashed/Center/Hidden, lineweight; editable entity geometry/styles; LAYUNISO currently shows all layers |
+| Snaps | Selectable running modes: end/mid/center/node/quadrant/insertion; analytic line/circle/arc intersections; nearest, perpendicular and tangent with base point; ellipse quadrants and spline ends; per-mode markers; no tracking, overrides or general spline intersections |
+| Layers/properties | Visibility, locking, colors, Continuous/Dashed/Center/Hidden, lineweight; rename, delete empty layers, isolate one layer; editable entity geometry/styles with `*VARIES*`; interactive MATCHPROP; LAYUNISO currently shows all layers |
 | Units | mm, cm, m, in, ft; changing units reinterprets values, without geometry rescaling |
-| Plotting | Single-sheet PDF: A4–A0, Letter/Legal/Tabloid, orientation, Fit/exact scale, color/monochrome, selection-only, lineweights; clipping confirmation |
+| Plotting | Native Print/Page Setup with extents/selection/display area, Fit or 1:N scale, monochrome/colors, lineweights; Export PDF: A4–A0, Letter/Legal/Tabloid, orientation, Fit/exact scale, selection-only; white objects plot black; no plot style tables |
 | DXF import | Planar LINE/CIRCLE/ARC/POINT/ELLIPSE/SPLINE, zero-width LWPOLYLINE and legacy POLYLINE, TEXT, simplified MTEXT, basic dimensions, static uniform INSERT |
 | DXF export | R2013 primitives/blocks; ellipses/splines retained; dimensions, leaders and hatches flatten to lines/text; solid hatch fill lost |
 | DXF styles | Approximate indexed layer colors, entity true color, supported linetypes/weights, units; layer locking not exchanged; unknown patterns simplified |
