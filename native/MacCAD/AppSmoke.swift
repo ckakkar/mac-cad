@@ -20,12 +20,14 @@ import MetalKit
             let url = directory.appendingPathComponent("saved.maccad")
             try original.writeSafely(to:url,ofType:nativeDocumentType,for:.saveOperation)
             let reopened = DrawingDocument()
-            try reopened.read(from:Data(contentsOf:url),ofType:nativeDocumentType)
+            try reopened.read(from:url,ofType:nativeDocumentType)
             let actual = try await reopened.core.request(["op":"serialize"])
             guard NSDictionary(dictionary:expected).isEqual(to:actual) else { throw CoreError.message("NSDocument save/reopen changed document geometry") }
-            // Recovery data uses the exact same versioned, validated native payload.
-            let recovery = try original.data(ofType:nativeDocumentType)
+            // Autosave recovery writes the exact same versioned, validated native file.
+            let recovery = directory.appendingPathComponent("recovery.maccad")
+            try original.write(to:recovery,ofType:nativeDocumentType)
             let recovered = DrawingDocument(); try recovered.read(from:recovery,ofType:nativeDocumentType)
+            guard (try? recovered.write(to:directory.appendingPathComponent("drawing.dwg"),ofType:nativeDocumentType)) == nil else { throw CoreError.message("A native save wrote over a DWG path") }
             let bounds = CADBounds(min:.init(x:-1000,y:-1000),max:.init(x:8000,y:5000))
             let scene = try await recovered.core.scene(bounds:bounds,tolerance:0.2)
             guard !scene.segments.isEmpty, !scene.triangles.isEmpty, scene.labels.count == 2 else { throw CoreError.message("Scene data missing after recovery") }

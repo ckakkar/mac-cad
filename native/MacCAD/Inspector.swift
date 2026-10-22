@@ -76,11 +76,12 @@ struct PropertiesPanel: View {
     }
     static func kindTitle(_ kind: String) -> String {
         ["line": "Line", "polyline": "Polyline", "circle": "Circle", "arc": "Arc", "ellipse": "Ellipse", "spline": "Spline", "point": "Point", "text": "Text",
-         "dimension": "Dimension", "radial_dimension": "Radial Dimension", "leader": "Leader", "hatch": "Hatch", "insert": "Block Reference"][kind] ?? "Object"
+         "dimension": "Dimension", "radial_dimension": "Radial Dimension", "leader": "Leader", "hatch": "Hatch", "insert": "Block Reference",
+         "region": "Hatch", "solid": "2D Solid", "image": "Image", "x_line": "Construction Line"][kind] ?? "Object"
     }
     static func icon(for kind: String) -> NSImage {
         let tool: Tool? = ["line": .line, "polyline": .polyline, "circle": .circle, "arc": .arc, "ellipse": .ellipse, "spline": .spline, "point": .point, "text": .text,
-                           "dimension": .dimension, "radial_dimension": .radius, "leader": .leader, "hatch": .hatch, "insert": .insert][kind]
+                           "dimension": .dimension, "radial_dimension": .radius, "leader": .leader, "hatch": .hatch, "insert": .insert, "region": .hatch, "solid": .hatch][kind]
         return tool.map { CADIcon.image(for: $0, size: 20) } ?? NSImage(systemSymbolName: "square.dashed", accessibilityDescription: nil)!
     }
 
@@ -204,8 +205,27 @@ private struct GeometryFields: View {
             }
             number("spacing", "Spacing")
         case "insert":
-            LabeledContent("Name", value: entity["block"] as? String ?? "")
-            pointRows("at", "Position"); number("scale", "Scale"); angle("rotation", "Rotation")
+            if let dimension = entity["dimension"] as? [String: Any] {
+                // Imported dimensions keep their drawn graphics as an anonymous block.
+                LabeledContent("Dimension type", value: (dimension["kind"] as? String ?? "").capitalized)
+                LabeledContent("Measurement", value: model.format((dimension["measurement"] as? NSNumber)?.doubleValue ?? 0))
+                if let text = dimension["text"] as? String, !text.isEmpty { LabeledContent("Text override", value: text) }
+                if let style = dimension["style"] as? String, !style.isEmpty { LabeledContent("Dimension style", value: style) }
+            } else {
+                LabeledContent("Name", value: entity["block"] as? String ?? "")
+                pointRows("at", "Position"); number("scale", "Scale"); angle("rotation", "Rotation")
+                if let y = value("y_scale") { LabeledContent("Y scale", value: model.format(y)) }
+                ForEach(Array((entity["attributes"] as? [[String: Any]] ?? []).enumerated()), id: \.offset) { _, a in
+                    LabeledContent(a["tag"] as? String ?? "Attribute", value: a["text"] as? String ?? "")
+                }
+            }
+        case "region":
+            LabeledContent("Pattern", value: entity["solid"] as? Bool == true ? "SOLID" : (entity["pattern"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "User defined")
+            LabeledContent("Boundary loops", value: "\((entity["loops"] as? [Any])?.count ?? 0)")
+        case "image":
+            LabeledContent("File", value: ((entity["path"] as? String) ?? "").isEmpty ? "Not found" : (entity["path"] as? String ?? ""))
+            pointRows("at", "Position")
+        case "x_line": pointRows("at", "Base point"); LabeledContent("Type", value: entity["ray"] as? Bool == true ? "Ray" : "Construction line")
         default: EmptyView()
         }
     }

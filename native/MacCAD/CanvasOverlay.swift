@@ -12,16 +12,15 @@ extension DrawingCanvas {
 
     func drawLabels() {
         let size = bounds.size
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let reach = max(size.width, size.height) * 2
         for label in scene.labels {
             let at = camera.screen(label.at, size: size), height = label.height * camera.scale
-            guard height >= 3, height < 2000, at.x > -2000, at.x < size.width + 2000, at.y > -2000, at.y < size.height + 2000 else { continue }
-            NSGraphicsContext.saveGraphicsState()
-            let transform = NSAffineTransform(); transform.translateX(by: at.x, yBy: at.y); transform.rotate(byRadians: label.rotation); transform.concat()
+            // Wrapped paragraphs can extend far from their insertion point.
+            let extent = max(reach, CGFloat(label.wrap ?? 0) * camera.scale)
+            guard height >= 2.5, height < 4000, at.x > -extent, at.x < size.width + extent, at.y > -extent, at.y < size.height + extent else { continue }
             let c = settings.displayColor(SIMD4<Float>(label.color[0], label.color[1], label.color[2], 1))
-            let font = NSFont.systemFont(ofSize: height)
-            // Text insertion points are baselines.
-            (label.text as NSString).draw(at: NSPoint(x: 0, y: font.descender), withAttributes: [.font: font, .foregroundColor: NSColor(srgbRed: CGFloat(c.x), green: CGFloat(c.y), blue: CGFloat(c.z), alpha: 1)])
-            NSGraphicsContext.restoreGraphicsState()
+            CADText.draw(label, in: context, map: { self.camera.screen($0, size: size) }, scale: camera.scale, color: NSColor(srgbRed: CGFloat(c.x), green: CGFloat(c.y), blue: CGFloat(c.z), alpha: 1))
         }
     }
 

@@ -177,14 +177,9 @@ fn malformed_native_and_recursive_blocks_are_rejected() {
     assert!(e.dispatch(json!({"op":"load","document":invalid})).is_err());
     assert_eq!(e.doc, before);
     let mut d = Document::default();
-    d.blocks.insert(
+    std::sync::Arc::make_mut(&mut d.blocks).insert(
         "loop".into(),
-        vec![Shape::Insert {
-            block: "loop".into(),
-            at: Point::default(),
-            scale: 1.0,
-            rotation: 0.0,
-        }],
+        vec![Shape::insert("loop", Point::default(), 1.0, 0.0).into()],
     );
     assert!(Engine::new(d).is_err());
 }

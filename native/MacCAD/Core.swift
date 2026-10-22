@@ -33,6 +33,16 @@ struct CADLabel: Codable {
     var rotation: Double
     var color: [Float]
     var entity: UInt64
+    // Formatting is omitted from the batch when it has the default value.
+    var width_factor: Double?
+    var oblique: Double?
+    var halign: UInt8?
+    var valign: UInt8?
+    var align: CADPoint?
+    var attachment: UInt8?
+    var wrap: Double?
+    var line_spacing: Double?
+    var font: String?
 }
 struct Scene {
     var segments: [CadSegment] = []

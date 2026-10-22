@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.8 — DWG drawings
+
+- Replace the DXF importer with MacCAD's own reader, written from the DXF
+  reference. DWG files still convert through the bundled LibreDWG first. It reads
+  hatches (any boundary, holes, stored patterns, solid fill), dimension graphics,
+  leaders, block attributes, MINSERT, mirrored and non-uniform inserts, block
+  entity layers with ByBlock/layer-0 inheritance, wide polylines, 2D solids,
+  construction lines, image/OLE frames, object coordinate systems, layer
+  frozen/plot flags, drawing linetypes with LTSCALE, PDMODE points, text styles and
+  the full 256-color ACI table. The import report counts every omitted object type.
+- Draw text with its style's TrueType family, cap-height sizing, TEXT
+  justification (including Aligned/Fit), width factor and obliquing, and MTEXT
+  attachment, wrapping, line spacing, paragraph indent and stacked fractions.
+- Raise import limits for real drawings (1 GiB DWG, 4 GiB DXF, 5 million objects)
+  and give LibreDWG five minutes. Summarize its decoding problems by kind.
+- Save and open `.maccad` files in the Rust core (format version 3) so large
+  drawings never cross the bridge as one JSON value; float values round-trip
+  exactly.
+- The import confirmation can be turned off with “Don’t ask again”.
+- Mouse wheels zoom about the cursor (1.2× per notch, Settings can reverse it),
+  and trackpad gestures pan. The canvas redraws its cached scene while zooming
+  and rebuilds it only when the view leaves it or curves need finer detail.
+- DXF export writes block entity layers and styles, polyline widths, text style
+  and MTEXT attachment, drawing linetypes, anonymous block flags and attribute
+  values (as text); lineweight ByLayer is no longer written as 0.00 mm.
+- Fix hatch pattern lines that touched a boundary corner drawing outside it.
+- Add `MacCAD --render-snapshot <drawing> <out.pdf> [window]` for rendering checks
+  without the user interface.
+
 ## 0.4 — Native workspace
 
 - Rebuild each drawing window around native AppKit structure: a customizable

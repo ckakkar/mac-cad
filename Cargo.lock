@@ -52,6 +52,7 @@ name = "cad-core"
 version = "0.1.0"
 dependencies = [
  "dxf",
+ "earcutr",
  "rstar",
  "serde",
  "serde_json",
@@ -116,6 +117,16 @@ dependencies = [
  "serde",
  "uuid",
  "xmltree",
+]
+
+[[package]]
+name = "earcutr"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "afc28d89ac6cb489f679fcf51aaa62b4667bb0fb73a30f1d4d23949069707c07"
+dependencies = [
+ "itertools",
+ "num-traits 0.2.19",
 ]
 
 [[package]]

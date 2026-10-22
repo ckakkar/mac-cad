@@ -5,3 +5,6 @@
 .DS_Store
 *.xcuserstate
 *.maccad.recovery
+
+# Personal Claude Code settings
+.claude/settings.local.json

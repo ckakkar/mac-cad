@@ -18,19 +18,14 @@ let nativeDocumentType = "xyz.ckakkar.maccad.drawing"
         if imported { updateChangeCount(.changeDone) }
     }
     var drawingWindow: NSWindow? { windowControllers.first?.window }
-    override func data(ofType typeName: String) throws -> Data {
-        guard typeName == nativeDocumentType else { throw CoreError.message("Save as a .maccad drawing. Use Export DXF for exchange files.") }
-        let value = try core.requestSync(["op": "serialize"])
-        return try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
-    }
-    override func read(from data: Data, ofType typeName: String) throws {
-        guard data.count <= 128 * 1024 * 1024 else { throw CoreError.message("Native drawing exceeds the alpha's 128 MiB limit") }
-        let value = try JSONSerialization.jsonObject(with: data)
-        _ = try core.requestSync(["op": "load", "document": value])
+    // The Rust core reads and writes native files itself; NSDocument supplies
+    // the temporary URL for safe saves and versions.
+    override func read(from url: URL, ofType typeName: String) throws {
+        _ = try core.requestSync(["op": "open_native", "path": url.path])
     }
     override func write(to url: URL, ofType typeName: String) throws {
-        guard url.pathExtension.lowercased() == "maccad" else { throw CoreError.message("Native drawings must use .maccad; imported DWG/DXF files cannot be overwritten by native saves.") }
-        try super.write(to: url, ofType: typeName)
+        guard typeName == nativeDocumentType, url.pathExtension.lowercased() == "maccad" else { throw CoreError.message("Native drawings must use .maccad; imported DWG/DXF files cannot be overwritten by native saves. Use Export DXF for exchange files.") }
+        _ = try core.requestSync(["op": "save_native", "path": url.path])
     }
     override func updateChangeCount(_ change: NSDocument.ChangeType) {
         super.updateChangeCount(change)
@@ -162,10 +157,16 @@ let nativeDocumentType = "xyz.ckakkar.maccad.drawing"
     override func openDocument(withContentsOf url: URL, display displayDocument: Bool, completionHandler: @escaping (NSDocument?, Bool, Error?) -> Void) {
         let ext = url.pathExtension.lowercased()
         guard ext == "dxf" || ext == "dwg" else { super.openDocument(withContentsOf: url, display: displayDocument, completionHandler: completionHandler); return }
-        let alert = NSAlert(); alert.messageText = ext == "dwg" ? "Experimental DWG import" : "Import DXF subset"
-        alert.informativeText = "Import creates a new native drawing. Unsupported objects, layouts, styles, fonts, attributes and external references may be omitted or changed. Compare the result with the original before relying on it. The source file will not be overwritten."
-        alert.addButton(withTitle: "Import Copy"); alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { completionHandler(nil, false, nil); return }
+        // Import is lossy, so the first import asks; the choice can be remembered.
+        let suppressKey = "ImportWithoutConfirmation"
+        if !UserDefaults.standard.bool(forKey: suppressKey) {
+            let alert = NSAlert(); alert.messageText = ext == "dwg" ? "Open a copy of this DWG drawing?" : "Open a copy of this DXF drawing?"
+            alert.informativeText = "MacCAD opens model space as a new drawing and leaves the original file untouched. Layouts, external references, OLE contents and some object types are not carried over; the import report lists everything left out. Compare the result with the original before relying on it."
+            alert.addButton(withTitle: "Open Copy"); alert.addButton(withTitle: "Cancel")
+            alert.showsSuppressionButton = true; alert.suppressionButton?.title = "Don’t ask again"
+            guard alert.runModal() == .alertFirstButtonReturn else { completionHandler(nil, false, nil); return }
+            if alert.suppressionButton?.state == .on { UserDefaults.standard.set(true, forKey: suppressKey) }
+        }
         Task {
             do {
                 let core = CADCore()
@@ -195,12 +196,22 @@ let nativeDocumentType = "xyz.ckakkar.maccad.drawing"
 
 enum DWGImport {
     struct Conversion { let file: URL; let warnings: [String] }
+    /// Groups LibreDWG's per-object log lines into counted kinds.
+    static func summarize(_ log: String) -> [String] {
+        var counts: [String: Int] = [:]
+        for line in log.split(separator: "\n") where line.contains("Warning:") || line.contains("ERROR:") {
+            let kind = line.replacing(#/[0-9A-Fa-f]*[0-9][0-9A-Fa-f.x]*/#, with: "#").trimmingCharacters(in: .whitespaces)
+            counts[kind, default: 0] += 1
+        }
+        let top = counts.sorted { $0.value > $1.value }.prefix(6).map { "LibreDWG: \($0.key) (\($0.value)×)" }
+        return counts.isEmpty ? [] : ["The DWG reader (LibreDWG) reported \(counts.values.reduce(0, +)) decoding problems; affected objects may be missing or changed."] + top
+    }
     static func convert(_ source: URL) async throws -> Conversion {
         try await Task.detached(priority: .userInitiated) {
             // Never execute a drawing-specified command, search PATH, or use a shell.
             let candidates = [Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/dwg2dxf").path, "/opt/homebrew/bin/dwg2dxf", "/usr/local/bin/dwg2dxf"]
             guard let executable = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { throw CoreError.message("DWG import requires LibreDWG's dwg2dxf helper. Install the open-source libredwg package, then try again. DWG writing is not supported.") }
-            guard (try source.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) <= 128 * 1024 * 1024 else { throw CoreError.message("DWG exceeds the 128 MiB import limit") }
+            guard (try source.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) <= 1024 * 1024 * 1024 else { throw CoreError.message("DWG exceeds the 1 GiB import limit") }
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("maccad-dwg-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let output = dir.appendingPathComponent("import.dxf")
@@ -212,13 +223,12 @@ enum DWGImport {
             do {
                 try process.run()
                 let timeout = DispatchWorkItem { if process.isRunning { process.terminate(); DispatchQueue.global().asyncAfter(deadline: .now() + 2) { if process.isRunning { kill(process.processIdentifier, SIGKILL) } } } }
-                DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeout)
+                DispatchQueue.global().asyncAfter(deadline: .now() + 300, execute: timeout)
                 process.waitUntilExit(); timeout.cancel()
                 guard process.terminationStatus == 0, FileManager.default.fileExists(atPath: output.path) else { throw CoreError.message("LibreDWG could not convert this drawing (exit \(process.terminationStatus)). No drawing was opened.") }
                 let reader = try FileHandle(forReadingFrom: log); defer { try? reader.close() }
-                let logData = try reader.read(upToCount: 65536) ?? Data()
-                let warnings = String(decoding: logData, as: UTF8.self).split(separator: "\n").filter { $0.contains("Warning:") || $0.contains("ERROR:") }.prefix(40).map(String.init)
-                return Conversion(file: output, warnings: warnings)
+                let logData = try reader.read(upToCount: 8 * 1024 * 1024) ?? Data()
+                return Conversion(file: output, warnings: summarize(String(decoding: logData, as: UTF8.self)))
             } catch { try? FileManager.default.removeItem(at: dir); throw error }
         }.value
     }

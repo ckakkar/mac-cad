@@ -51,8 +51,8 @@ Modify commands accept preselection or prompt for objects after invocation.
 Help ▸ Command Reference lists numeric command forms. See [USAGE.md](USAGE.md)
 for examples and the limits of each editing operation.
 
-Save editable work as `.maccad`. Version 2 documents retain geometry and properties;
-version 1 documents migrate on opening. AppKit coordinates safe saves, autosave and
+Save editable work as `.maccad`. Version 3 documents retain geometry, properties,
+blocks, attributes, linetypes and text styles; versions 1 and 2 migrate on opening. AppKit coordinates safe saves, autosave and
 versions. Export DXF produces an explicitly limited R2013 subset. File ▸ Print plots
 through the macOS print panel (printer or PDF) with plot area, scale, plot style and
 lineweight options; File ▸ Export ▸ PDF offers A4–A0, Letter, Legal and Tabloid,
@@ -60,15 +60,20 @@ orientation, exact scale or Fit, colors or monochrome, and selection-only output
 
 ## DXF and DWG
 
-Open a DXF or DWG to import into a new native document. Review the import report:
-unsupported objects and styling are omitted or simplified, and the original source
-is never overwritten by native saves. Compare the result against the original.
+Open a DXF or DWG to import model space into a new native document. MacCAD's own
+DXF reader keeps hatches, dimension graphics, leaders, block attributes, mirrored
+and non-uniform inserts, wide polylines, linetypes and text justification. The
+import report lists what it omits: layouts and paper space, external references,
+MLEADER, tables, OLE and image contents, extended data and dictionaries. The
+original file is never overwritten. Compare the result against the original.
 
 The DMG **includes LibreDWG 0.14**; a separate Homebrew install is unnecessary.
-DWG conversion runs in a separate process with a timeout and visible diagnostics,
-then uses the same DXF subset importer. Smoke checks exercise upstream LibreDWG
-line fixtures from DWG 2000, 2013 and 2018; this does not qualify arbitrary drawings.
-**DWG export is not implemented.** There is no lossless exchange or plugin claim.
+DWG conversion runs in a separate process with a time limit, then MacCAD's DXF
+reader imports the result; LibreDWG's decoding problems are summarized in the
+report. Checks use upstream LibreDWG fixtures from DWG 2000, 2013 and 2018 and two
+private architectural drawings. That does not qualify arbitrary drawings.
+**DWG saving is not implemented.** Save as `.maccad` or export DXF; there is no
+lossless exchange or plugin claim.
 
 ## Build and run
 

@@ -31,6 +31,8 @@ import SwiftUI
     /// Each entity's contiguous run of scene segments, for highlight and ghosts.
     private(set) var entityRanges: [UInt64: Range<Int>] = [:]
     private var sceneBounds: CADBounds?
+    /// The zoom the current scene was tessellated for.
+    private var sceneScale = 0.0
     private var sceneRevision: UInt64 = .max
     private var loading = false
     private var pendingRefresh = false
@@ -134,7 +136,9 @@ import SwiftUI
         metal.needsDisplay = true; labels.needsDisplay = true; overlay.needsDisplay = true
         guard bounds.width > 0, bounds.height > 0 else { return }
         let visible = camera.bounds(size: bounds.size)
-        if !force, sceneRevision == model.revision, sceneBounds?.contains(visible) == true { return }
+        // The GPU redraws the cached scene at any zoom; rebuild only when the view
+        // leaves it or zooms in far enough that curves would look faceted.
+        if !force, sceneRevision == model.revision, sceneBounds?.contains(visible) == true, camera.scale < sceneScale * 1.6 { return }
         if loading { pendingRefresh = true; return }
         loading = true
         let b = camera.bounds(size: bounds.size, margin: 2)
@@ -143,7 +147,7 @@ import SwiftUI
         Task {
             do {
                 let result = try await model.core.scene(bounds: b, tolerance: 0.35 / scale)
-                scene = result; sceneBounds = b; sceneRevision = revision
+                scene = result; sceneBounds = b; sceneRevision = revision; sceneScale = scale
                 var ranges: [UInt64: Range<Int>] = [:]
                 var start = 0
                 for i in result.segments.indices where i + 1 == result.segments.count || result.segments[i + 1].entity != result.segments[i].entity {
@@ -294,10 +298,23 @@ import SwiftUI
         guard let previous = viewHistory.popLast() else { NSSound.beep(); return }
         camera = previous; justFitted = false; refresh(force: true)
     }
-    private func zoomCentered(_ amount: Double) { rememberView(); camera.scale = min(max(camera.scale * amount, 1e-8), 1e8); justFitted = false; refresh(force: true) }
+    private func zoomCentered(_ amount: Double) { rememberView(); camera.scale = min(max(camera.scale * amount, 1e-8), 1e8); justFitted = false; refresh() }
+    /// A mouse wheel (including smooth-scrolling mice, which send no gesture phases)
+    /// zooms about the cursor, as in AutoCAD. Trackpad and Magic Mouse gestures pan
+    /// unless Settings makes them zoom; Command-scroll always zooms.
     override func scrollWheel(with event: NSEvent) {
-        if event.modifierFlags.contains(.command) || !event.hasPreciseScrollingDeltas { rememberGesture(event); zoom(exp(event.scrollingDeltaY * 0.025), event: event) }
-        else { camera.center.x -= event.scrollingDeltaX / camera.scale; camera.center.y += event.scrollingDeltaY / camera.scale; justFitted = false; refresh() }
+        let gesture = !event.phase.isEmpty || !event.momentumPhase.isEmpty
+        guard event.modifierFlags.contains(.command) || !gesture || settings.gestureScrollZooms else {
+            camera.center.x -= event.scrollingDeltaX / camera.scale; camera.center.y += event.scrollingDeltaY / camera.scale; justFitted = false; refresh(); return
+        }
+        // Normalize to the physical direction: forward/away zooms in.
+        var forward = event.isDirectionInvertedFromDevice ? -event.scrollingDeltaY : event.scrollingDeltaY
+        if settings.reverseWheelZoom { forward = -forward }
+        guard forward != 0 else { return }
+        rememberGesture(event)
+        // Line-based wheels zoom 1.2× per notch; pixel deltas zoom proportionally.
+        let factor = event.hasPreciseScrollingDeltas ? exp(max(min(forward, 80), -80) * 0.006) : pow(1.2, max(min(forward, 5), -5))
+        zoom(factor, event: event)
     }
     override func magnify(with event: NSEvent) { rememberGesture(event); zoom(max(0.1, 1 + event.magnification), event: event) }
     /// Two-finger double-tap toggles between the drawing extents and the previous view.
@@ -308,8 +325,7 @@ import SwiftUI
         camera.scale = min(max(camera.scale * amount, 1e-8), 1e8)
         camera.center = camera.center + before - camera.world(p, size: bounds.size)
         justFitted = false
-        // Retessellate curves/grid at the new screen-space tolerance.
-        refresh(force: true)
+        refresh()
     }
 
     // MARK: Keyboard

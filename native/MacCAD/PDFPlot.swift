@@ -106,10 +106,7 @@ import UniformTypeIdentifiers
         }
         NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
         for l in scene.labels {
-            context.saveGState(); context.translateBy(x: l.at.x, y: l.at.y); context.rotate(by: l.rotation)
-            let font = NSFont.systemFont(ofSize: l.height)
-            (l.text as NSString).draw(at: NSPoint(x: 0, y: font.descender), withAttributes: [.font: font, .foregroundColor: NSColor(cgColor: ink(l.color[0], l.color[1], l.color[2])) ?? .black])
-            context.restoreGState()
+            CADText.draw(l, in: context, map: { CGPoint(x: $0.x, y: $0.y) }, scale: 1, color: NSColor(cgColor: ink(l.color[0], l.color[1], l.color[2])) ?? .black)
         }
         NSGraphicsContext.restoreGraphicsState()
         context.restoreGState()

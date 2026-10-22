@@ -116,8 +116,9 @@ two-finger pan/pinch or wheel zoom and Option- or middle-drag pan; a two-finger
 double-tap toggles between the drawing extents and the previous view.
 
 Save as `.maccad` for editable native geometry. Open DXF/DWG to import a new native
-drawing and review all warnings. Exporting DXF flattens some annotations/fills;
-DWG writing is unavailable. File ▸ Print (⌘P) uses the macOS print panel: choose the
+drawing and review the import report, which lists every omitted object type.
+Exporting DXF flattens hatches and MacCAD-drawn annotations; DWG saving is
+unavailable. File ▸ Print (⌘P) uses the macOS print panel: choose the
 printer or PDF, paper and orientation, and in the Plot section the plot area
 (Extents, Selection or Display), scale (Fit to Paper or 1:N in drawing units),
 monochrome or drawing colors and lineweights. Page Setup is ⇧⌘P. File ▸ Export ▸ PDF

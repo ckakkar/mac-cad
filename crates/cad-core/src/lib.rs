@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod curves;
 pub mod drafting;
+pub mod dxfread;
 pub mod exchange;
 pub mod ffi;
 pub mod geometry;

@@ -3,12 +3,32 @@
 Local environment: Apple M2, 16 GiB RAM, macOS 27.0.1, Command Line Tools only (no
 Xcode), arm64 release builds.
 
-`make check` passes Rust formatting and clippy with warnings denied, 39 core tests,
+`make check` passes Rust formatting and clippy with warnings denied, 48 core tests,
 Swift/C/Rust draw/select/move/undo/redo/save/reopen, and packaged app verification
 (plist, arm64, nested signatures, linkage and license notices). App integration
 exercises coordinated NSDocument save/reopen, recovery payloads, worker queues,
 binary geometry, Metal pipeline compilation, PDF generation, the print plot view
 and bundled LibreDWG imports of upstream 2000/2013/2018 `Line.dwg` fixtures.
+Native saves and recovery files are written and read by the Rust core, and a
+native save to a `.dwg` path is refused.
+
+DXF reader tests (`tests/dxf_import.rs`) build drawings from group codes and
+check: hatch pattern lines that touch boundary corners stay inside and have the
+exact expected length; MTEXT paragraph indent; TEXT justification points; stacked
+fractions; block base points, entity layers and ByBlock inheritance; mirrored,
+non-uniform inserts with attributes; frozen layers; dimension graphics blocks;
+reported paper-space and unsupported objects; DXF export of attribute values and
+anonymous dimension blocks.
+
+Local checks on private drawings that are not committed (on Apple M2, 16 GB):
+a 38 MB AutoCAD 2004-format farmhouse plan converts in 4.8 s, and the 184 MB DXF
+is read in 0.6 s (100,957 model-space objects, 8,630 blocks, 118 layers). Building
+the full-extents scene takes 0.25 s (2.1 million segments, 259k fill triangles).
+A native save is 94 MB, serializes in 0.12 s and reads back exactly. Snapshot
+renders of the ground-floor sheet were inspected for hatch clipping, text
+placement and dimension graphics; they were not yet compared side by side with
+AutoCAD. A 419 KB street-lighting library (40 references to 64 blocks) renders
+completely.
 
 New core tests cover grip points and stretch edits for lines, circles, arcs and
 straight/bulged polyline segments; grip commits, invalid/locked refusals and undo;

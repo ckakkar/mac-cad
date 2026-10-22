@@ -73,14 +73,8 @@ fn arc_midpoint_and_polyline_bulge_grips_reshape_curves() {
     assert!((radius - 1.25).abs() < 1e-9 && close(center, Point::new(0.0, 0.75)));
     let pline = Shape::Polyline {
         vertices: vec![
-            Vertex {
-                point: Point::new(0.0, 0.0),
-                bulge: 0.0,
-            },
-            Vertex {
-                point: Point::new(2.0, 0.0),
-                bulge: 0.0,
-            },
+            Vertex::new(Point::new(0.0, 0.0), 0.0),
+            Vertex::new(Point::new(2.0, 0.0), 0.0),
         ],
         closed: false,
     };

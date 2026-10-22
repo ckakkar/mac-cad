@@ -154,7 +154,7 @@ pub fn offset_polyline(vertices: &[Vertex], closed: bool, distance: f64) -> Resu
         if point.distance(vertices[i].point) > distance.abs() * 1000.0 + EPS {
             return Err("Offset would create an excessive miter".into());
         }
-        output.push(Vertex { point, bulge: 0.0 });
+        output.push(Vertex::new(point, 0.0));
     }
     Ok(Shape::Polyline {
         vertices: output,

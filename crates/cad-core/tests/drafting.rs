@@ -357,31 +357,24 @@ fn dxf_preview_is_optional_and_default_layer_is_unique() {
 #[test]
 fn compact_block_expansion_is_bounded() {
     let mut d = Document::default();
-    d.blocks.insert(
+    let blocks = std::sync::Arc::make_mut(&mut d.blocks);
+    blocks.insert(
         "leaf".into(),
         vec![Shape::Line {
             a: Point::new(0.0, 0.0),
             b: Point::new(1.0, 0.0),
-        }],
+        }
+        .into()],
     );
     let mut previous = "leaf".to_string();
-    for i in 0..7 {
+    // Ten levels of ten references expand to ten billion objects.
+    for i in 0..10 {
         let name = format!("branch{i}");
-        let child = Shape::Insert {
-            block: previous,
-            at: Point::new(0.0, 0.0),
-            scale: 1.0,
-            rotation: 0.0,
-        };
-        d.blocks.insert(name.clone(), vec![child; 10]);
+        let child = Shape::insert(previous, Point::new(0.0, 0.0), 1.0, 0.0);
+        blocks.insert(name.clone(), vec![child.into(); 10]);
         previous = name;
     }
-    d.insert(Shape::Insert {
-        block: previous,
-        at: Point::new(0.0, 0.0),
-        scale: 1.0,
-        rotation: 0.0,
-    });
+    d.insert(Shape::insert(previous, Point::new(0.0, 0.0), 1.0, 0.0));
     assert!(d.validate().unwrap_err().contains("million expanded"));
 }
 fn assert_near(a: &Value, b: &Value) {

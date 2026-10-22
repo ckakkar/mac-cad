@@ -109,6 +109,19 @@ pub fn grips(shape: &Shape) -> Vec<Grip> {
         ],
         Shape::Leader { points, .. } => points.iter().map(|p| grip(*p, "vertex")).collect(),
         Shape::Hatch { boundary, .. } => boundary.iter().map(|p| grip(*p, "vertex")).collect(),
+        Shape::Region { loops, .. } => loops
+            .iter()
+            .flatten()
+            .map(|v| grip(v.point, "vertex"))
+            .collect(),
+        Shape::Solid { points } => points.iter().map(|p| grip(*p, "vertex")).collect(),
+        Shape::Image { at, u, v, .. } => vec![
+            grip(*at, "insertion"),
+            grip(*at + *u, "vertex"),
+            grip(*at + *u + *v, "vertex"),
+            grip(*at + *v, "vertex"),
+        ],
+        Shape::XLine { at, .. } => vec![grip(*at, "midpoint")],
     }
 }
 
@@ -125,7 +138,36 @@ pub fn stretch(shape: &Shape, index: usize, to: Point) -> Result<Shape, String> 
     let delta = to - from;
     let moved = shape.transformed(Transform::translation(delta));
     let out = match shape.clone() {
-        Shape::Point { .. } | Shape::Text { .. } | Shape::Insert { .. } => moved,
+        Shape::Point { .. }
+        | Shape::Text { .. }
+        | Shape::Insert { .. }
+        | Shape::Image { .. }
+        | Shape::XLine { .. } => moved,
+        Shape::Region {
+            mut loops,
+            solid,
+            pattern,
+            lines,
+        } => {
+            let mut k = index;
+            for l in &mut loops {
+                if k < l.len() {
+                    l[k].point = to;
+                    break;
+                }
+                k -= l.len();
+            }
+            Shape::Region {
+                loops,
+                solid,
+                pattern,
+                lines,
+            }
+        }
+        Shape::Solid { mut points } => {
+            points[index] = to;
+            Shape::Solid { points }
+        }
         Shape::Line { a, b } => match index {
             0 => Shape::Line { a: to, b },
             1 => Shape::Line { a, b: to },

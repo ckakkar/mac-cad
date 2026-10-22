@@ -44,7 +44,7 @@ impl Engine {
         let mut curves = Vec::new();
         for id in self.ids_in(b) {
             let e = &self.doc.entities[&id];
-            if !self.doc.layer(&e.layer).is_some_and(|l| l.visible) {
+            if !self.doc.layer(&e.layer).is_some_and(|l| l.shown()) {
                 continue;
             }
             collect(
@@ -246,19 +246,43 @@ fn collect(
             at,
             scale,
             rotation,
+            y_scale,
+            attributes,
+            ..
         } => {
-            let t = t.compose(Transform::translation(*at).compose(Transform::rotation(
-                Point::default(),
-                *rotation,
-                *scale,
-            )));
+            for a in attributes.iter().filter(|a| !a.invisible) {
+                points.push((t.apply(a.at), "insertion", 0));
+            }
+            let t = t.compose(Shape::insert_transform(*at, *scale, *y_scale, *rotation));
             points.push((t.apply(Point::default()), "insertion", 0));
-            if let Some(shapes) = doc.blocks.get(block) {
-                for s in shapes {
-                    collect(doc, s, t, points, curves, depth + 1);
+            if let Some(entities) = doc.blocks.get(block) {
+                for e in entities {
+                    collect(doc, &e.shape, t, points, curves, depth + 1);
                 }
             }
         }
+        Shape::Region { loops, .. } => {
+            for l in loops {
+                for s in polyline_edges(l, true) {
+                    collect(doc, &s, t, points, curves, depth + 1);
+                }
+            }
+        }
+        Shape::Solid { points: corners } => {
+            for (i, p) in corners.iter().enumerate() {
+                curves.push(Curve::Line(
+                    t.apply(*p),
+                    t.apply(corners[(i + 1) % corners.len()]),
+                ));
+            }
+        }
+        Shape::Image { at, u, v, .. } => {
+            let c = [*at, *at + *u, *at + *u + *v, *at + *v];
+            for i in 0..4 {
+                curves.push(Curve::Line(t.apply(c[i]), t.apply(c[(i + 1) % 4])));
+            }
+        }
+        Shape::XLine { at, .. } => points.push((t.apply(*at), "node", 0)),
     }
 }
 fn crossings(a: Curve, b: Curve) -> Vec<Point> {

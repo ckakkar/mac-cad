@@ -40,6 +40,12 @@ MainActor.assumeIsolated {
     if CommandLine.arguments.contains("--self-test") {
         Task { exit(await AppSmoke.run()) }
         application.run()
+    } else if CommandLine.arguments.contains("--render-snapshot") {
+        // No event loop: AppKit would treat the path arguments as documents to
+        // open and show windows. The main queue alone runs the snapshot.
+        application.setActivationPolicy(.prohibited)
+        Task { exit(await Snapshot.run(CommandLine.arguments)) }
+        dispatchMain()
     } else {
         let delegate = AppDelegate()
         application.delegate = delegate

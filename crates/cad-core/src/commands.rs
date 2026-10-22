@@ -3,7 +3,7 @@ use crate::model::{Document, Entity, Layer, Shape, Vertex};
 use crate::render::{entity_batch, entity_bounds, Batch};
 use rstar::{RTree, RTreeObject, AABB};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 #[derive(Clone, PartialEq)]
 struct Indexed {
@@ -21,7 +21,7 @@ pub(crate) struct Settings {
     pub(crate) layers: Vec<Layer>,
     pub(crate) units: String,
     pub(crate) current_layer: String,
-    pub(crate) blocks: BTreeMap<String, Vec<Shape>>,
+    pub(crate) blocks: crate::model::Blocks,
 }
 impl Settings {
     pub(crate) fn of(d: &Document) -> Self {
@@ -104,16 +104,17 @@ impl Engine {
     pub(crate) fn editable(&self, e: &Entity) -> bool {
         self.doc
             .layer(&e.layer)
-            .is_some_and(|l| l.visible && !l.locked)
+            .is_some_and(|l| l.shown() && !l.locked)
     }
     fn visible(&self, e: &Entity) -> bool {
-        self.doc.layer(&e.layer).is_some_and(|l| l.visible)
+        self.doc.layer(&e.layer).is_some_and(|l| l.shown())
     }
+    /// Drawing extents; construction lines are infinite and excluded, as in AutoCAD.
     pub fn bounds(&self) -> Option<Bounds> {
         self.doc
             .entities
             .values()
-            .filter(|e| self.visible(e))
+            .filter(|e| self.visible(e) && !matches!(e.shape, Shape::XLine { .. }))
             .filter_map(|e| entity_bounds(&self.doc, e))
             .reduce(|a, b| a.union(b))
     }
@@ -140,6 +141,9 @@ impl Engine {
             if highlight && self.selected.contains(&id) {
                 for s in &mut eb.segments {
                     s.color = [0.29, 0.67, 1.0, 1.0];
+                }
+                for t in &mut eb.triangles {
+                    t.color = [0.29, 0.67, 1.0, t.color[3].min(0.45)];
                 }
                 for l in &mut eb.labels {
                     l.color = [0.29, 0.67, 1.0, 1.0];
@@ -178,6 +182,21 @@ impl Engine {
                             d = d.min(p.distance(l.at).min(tolerance * 0.9));
                         }
                     }
+                }
+                // Clicking inside a fill selects it, as with solid hatches.
+                if d > tolerance
+                    && batch.triangles.iter().any(|t| {
+                        let (a, b, c) = (
+                            Point::new(t.ax, t.ay),
+                            Point::new(t.bx, t.by),
+                            Point::new(t.cx, t.cy),
+                        );
+                        let s = |p1: Point, p2: Point| (p2 - p1).cross(p - p1);
+                        let (d1, d2, d3) = (s(a, b), s(b, c), s(c, a));
+                        !((d1 < 0.0 || d2 < 0.0 || d3 < 0.0) && (d1 > 0.0 || d2 > 0.0 || d3 > 0.0))
+                    })
+                {
+                    d = tolerance * 0.95;
                 }
                 if d <= tolerance {
                     Some((id, d))
@@ -302,7 +321,7 @@ impl Engine {
         if !self
             .doc
             .layer(&self.doc.current_layer)
-            .is_some_and(|l| l.visible && !l.locked)
+            .is_some_and(|l| l.shown() && !l.locked)
         {
             return Err("Current layer is hidden or locked".into());
         }
@@ -396,7 +415,7 @@ impl Engine {
         Ok(())
     }
     pub fn state(&self) -> Value {
-        json!({"revision":self.revision,"dirty":self.revision!=self.saved_revision,"count":self.doc.entities.len(),"selected":self.selected,"layers":self.doc.layers,"current_layer":self.doc.current_layer,"units":self.doc.units,"bounds":self.bounds(),"can_undo":!self.undo.is_empty(),"can_redo":!self.redo.is_empty(),"diagnostics":self.diagnostics,"blocks":self.doc.blocks.keys().collect::<Vec<_>>(),"selection":self.selected.iter().take(100).filter_map(|id|self.doc.entities.get(id)).collect::<Vec<_>>(),"grips":self.selection_grips(),"undo_label":self.undo.last().map(|c|&c.label),"redo_label":self.redo.last().map(|c|&c.label)})
+        json!({"revision":self.revision,"dirty":self.revision!=self.saved_revision,"count":self.doc.entities.len(),"selected":self.selected,"layers":self.doc.layers,"current_layer":self.doc.current_layer,"units":self.doc.units,"bounds":self.bounds(),"can_undo":!self.undo.is_empty(),"can_redo":!self.redo.is_empty(),"diagnostics":self.diagnostics,"blocks":self.doc.blocks.keys().filter(|k|!k.starts_with('*')).take(5000).collect::<Vec<_>>(),"selection":self.selected.iter().take(100).filter_map(|id|self.doc.entities.get(id)).collect::<Vec<_>>(),"grips":self.selection_grips(),"undo_label":self.undo.last().map(|c|&c.label),"redo_label":self.redo.last().map(|c|&c.label)})
     }
     pub fn dispatch(&mut self, v: Value) -> Result<Value, String> {
         self.label = action_label(&v);
@@ -534,6 +553,32 @@ impl Engine {
                 *self = Self::new(doc)?;
                 Ok(self.state())
             }
+            // Native files are read and written here so large drawings never
+            // cross the bridge as one JSON value.
+            "save_native" => {
+                let path = std::path::Path::new(v["path"].as_str().ok_or("Missing path")?);
+                let bytes = serde_json::to_vec(&self.doc).map_err(|e| e.to_string())?;
+                let temporary = path.with_extension("maccad-partial");
+                std::fs::write(&temporary, bytes)
+                    .and_then(|_| std::fs::rename(&temporary, path))
+                    .map_err(|e| {
+                        let _ = std::fs::remove_file(&temporary);
+                        format!("The drawing could not be saved: {e}")
+                    })?;
+                Ok(json!({}))
+            }
+            "open_native" => {
+                let path = std::path::Path::new(v["path"].as_str().ok_or("Missing path")?);
+                let len = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+                if len > 2 * 1024 * 1024 * 1024 {
+                    return Err("Native drawing exceeds the 2 GiB limit".into());
+                }
+                let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+                let doc: Document = serde_json::from_slice(&bytes)
+                    .map_err(|e| format!("This is not a readable MacCAD drawing: {e}"))?;
+                *self = Self::new(doc)?;
+                Ok(self.state())
+            }
             "saved" => {
                 if v["revision"].as_u64() == Some(self.revision) {
                     self.saved_revision = self.revision;
@@ -614,7 +659,7 @@ impl Engine {
                     self.doc.entities.get(id).is_some_and(|e| {
                         self.doc
                             .layer(&e.layer)
-                            .is_some_and(|l| l.visible && !l.locked)
+                            .is_some_and(|l| l.shown() && !l.locked)
                     })
                 });
                 Ok(self.state())
@@ -663,7 +708,7 @@ impl Engine {
                 Some(Shape::Polyline {
                     vertices: [a, Point::new(b.x, a.y), b, Point::new(a.x, b.y)]
                         .into_iter()
-                        .map(|point| Vertex { point, bulge: 0.0 })
+                        .map(|point| Vertex::new(point, 0.0))
                         .collect(),
                     closed: true,
                 })
@@ -676,10 +721,7 @@ impl Engine {
                     let (p, b) = token.split_once(':').map_or((*token, 0.0), |(p, b)| {
                         (p, parse_number(b).unwrap_or(f64::NAN))
                     });
-                    vertices.push(Vertex {
-                        point: parse_point(p)?,
-                        bulge: b,
-                    });
+                    vertices.push(Vertex::new(parse_point(p)?, b));
                 }
                 Some(Shape::Polyline { vertices, closed })
             }
@@ -697,12 +739,7 @@ impl Engine {
                 if args.len() < 3 {
                     return Err("TEXT x,y height words…".into());
                 }
-                Some(Shape::Text {
-                    at: point(0)?,
-                    height: number(1)?,
-                    rotation: 0.0,
-                    text: args[2..].join(" "),
-                })
+                Some(Shape::text(point(0)?, args[2..].join(" "), number(1)?, 0.0))
             }
             "DIM" | "DIMLINEAR" | "DIMALIGNED" => Some(Shape::Dimension {
                 a: point(0)?,
@@ -724,19 +761,18 @@ impl Engine {
                     spacing: number(1)?,
                 })
             }
-            "INSERT" => Some(Shape::Insert {
-                block: args
-                    .first()
+            "INSERT" => Some(Shape::insert(
+                args.first()
                     .ok_or("INSERT name x,y [scale] [degrees]")?
                     .to_string(),
-                at: point(1)?,
-                scale: if args.len() > 2 { number(2)? } else { 1.0 },
-                rotation: if args.len() > 3 {
+                point(1)?,
+                if args.len() > 2 { number(2)? } else { 1.0 },
+                if args.len() > 3 {
                     number(3)?.to_radians()
                 } else {
                     0.0
                 },
-            }),
+            )),
             _ => None,
         };
         if let Some(shape) = shape {
@@ -849,11 +885,15 @@ impl Engine {
                 }
                 let selected = self.selection()?;
                 let mut s = Settings::of(&self.doc);
-                s.blocks.insert(
+                std::sync::Arc::make_mut(&mut s.blocks).insert(
                     name.to_string(),
                     selected
                         .iter()
-                        .map(|e| e.shape.transformed(Transform::translation(base * -1.0)))
+                        .map(|e| {
+                            e.shape
+                                .transformed(Transform::translation(base * -1.0))
+                                .into()
+                        })
                         .collect(),
                 );
                 let id = self.doc.next_id;
@@ -861,12 +901,7 @@ impl Engine {
                     id,
                     layer: self.doc.current_layer.clone(),
                     style: Default::default(),
-                    shape: Shape::Insert {
-                        block: name.to_string(),
-                        at: base,
-                        scale: 1.0,
-                        rotation: 0.0,
-                    },
+                    shape: Shape::insert(name.to_string(), base, 1.0, 0.0),
                 };
                 self.commit(
                     vec![insert],
@@ -879,27 +914,11 @@ impl Engine {
                 let mut remove = Vec::new();
                 let mut after = Vec::new();
                 for e in selected {
-                    if let Shape::Insert {
-                        block,
-                        at,
-                        scale,
-                        rotation,
-                    } = e.shape
-                    {
-                        let t = Transform::translation(at).compose(Transform::rotation(
-                            Point::default(),
-                            rotation,
-                            scale,
-                        ));
-                        for shape in &self.doc.blocks[&block] {
-                            let id = self.doc.next_id + after.len() as u64;
-                            after.push(Entity {
-                                id,
-                                layer: e.layer.clone(),
-                                style: e.style.clone(),
-                                shape: shape.transformed(t),
-                            });
-                        }
+                    if let Shape::Insert { .. } = e.shape {
+                        after.extend(
+                            self.doc
+                                .explode_insert(&e, self.doc.next_id + after.len() as u64)?,
+                        );
                         remove.push(e.id);
                     } else {
                         return Err("Explode currently supports static blocks".into());

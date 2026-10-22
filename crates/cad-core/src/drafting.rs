@@ -109,7 +109,7 @@ impl Engine {
                         if !self
                             .doc
                             .layer(layer)
-                            .is_some_and(|l| l.visible && !l.locked)
+                            .is_some_and(|l| l.shown() && !l.locked)
                         {
                             return Err("Destination layer must be visible and unlocked".into());
                         }
@@ -200,10 +200,17 @@ impl Engine {
                     }
                     s
                 };
-                for (name, shapes) in &source.blocks {
-                    settings
-                        .blocks
-                        .insert(names[name].clone(), shapes.iter().map(remap).collect());
+                for (name, entities) in source.blocks.iter() {
+                    std::sync::Arc::make_mut(&mut settings.blocks).insert(
+                        names[name].clone(),
+                        entities
+                            .iter()
+                            .map(|e| crate::model::BlockEntity {
+                                shape: remap(&e.shape),
+                                ..e.clone()
+                            })
+                            .collect(),
+                    );
                 }
                 for l in &source.layers {
                     if !settings.layers.iter().any(|v| v.name == l.name) {
@@ -222,7 +229,7 @@ impl Engine {
                         .layers
                         .iter()
                         .find(|l| l.name == e.layer)
-                        .is_some_and(|l| l.visible && !l.locked)
+                        .is_some_and(|l| l.shown() && !l.locked)
                     {
                         e.layer = self.doc.current_layer.clone();
                     }
@@ -363,10 +370,7 @@ impl Engine {
                         vertices: (0..count as usize)
                             .map(|i| {
                                 let a = rotation + TAU * i as f64 / count;
-                                Vertex {
-                                    point: center + Point::new(a.cos(), a.sin()) * radius,
-                                    bulge: 0.0,
-                                }
+                                Vertex::new(center + Point::new(a.cos(), a.sin()) * radius, 0.0)
                             })
                             .collect(),
                     })
@@ -392,12 +396,17 @@ impl Engine {
                     if args.len() < 3 {
                         return Err("MTEXT x,y height text (\\P starts a new paragraph)".into());
                     }
-                    Some(Shape::Text {
-                        at: point(0)?,
-                        height: num(1)?,
-                        rotation: 0.0,
-                        text: args[2..].join(" ").replace("\\P", "\n"),
-                    })
+                    // Multiline text attaches at its top-left corner, as MTEXT does.
+                    let mut text = Shape::text(
+                        point(0)?,
+                        args[2..].join(" ").replace("\\P", "\n"),
+                        num(1)?,
+                        0.0,
+                    );
+                    if let Shape::Text { format, .. } = &mut text {
+                        format.attachment = 1;
+                    }
+                    Some(text)
                 }
                 _ => None,
             };
@@ -619,52 +628,47 @@ impl Engine {
                     let mut after = Vec::new();
                     let mut remove = Vec::new();
                     for e in selected {
-                        let shapes =
-                            match &e.shape {
-                                Shape::Polyline { vertices, closed } => {
-                                    polyline_edges(vertices, *closed)
-                                }
-                                Shape::Insert {
-                                    block,
-                                    at,
-                                    scale,
-                                    rotation,
-                                } => {
-                                    let t = Transform::translation(*at).compose(
-                                        Transform::rotation(Point::default(), *rotation, *scale),
-                                    );
-                                    self.doc.blocks[block]
-                                        .iter()
-                                        .map(|s| s.transformed(t))
-                                        .collect()
-                                }
-                                Shape::Dimension { .. }
-                                | Shape::RadialDimension { .. }
-                                | Shape::Leader { .. }
-                                | Shape::Hatch { .. } => {
-                                    let b = entity_geometry(&self.doc, &e, 0.1);
-                                    let mut shapes: Vec<_> = b
-                                        .segments
+                        if let Shape::Insert { .. } = e.shape {
+                            after.extend(
+                                self.doc
+                                    .explode_insert(&e, self.doc.next_id + after.len() as u64)?,
+                            );
+                            remove.push(e.id);
+                            continue;
+                        }
+                        let shapes = match &e.shape {
+                            Shape::Polyline { vertices, closed } => {
+                                polyline_edges(vertices, *closed)
+                            }
+                            Shape::Region { .. } | Shape::Solid { .. } => {
+                                return Err("Hatches and fills cannot be exploded yet".into())
+                            }
+                            Shape::Dimension { .. }
+                            | Shape::RadialDimension { .. }
+                            | Shape::Leader { .. }
+                            | Shape::Hatch { .. } => {
+                                let b = entity_geometry(&self.doc, &e, 0.1);
+                                let mut shapes: Vec<_> = b
+                                    .segments
+                                    .into_iter()
+                                    .map(|s| Shape::Line {
+                                        a: Point::new(s.ax, s.ay),
+                                        b: Point::new(s.bx, s.by),
+                                    })
+                                    .collect();
+                                shapes.extend(
+                                    b.labels
                                         .into_iter()
-                                        .map(|s| Shape::Line {
-                                            a: Point::new(s.ax, s.ay),
-                                            b: Point::new(s.bx, s.by),
-                                        })
-                                        .collect();
-                                    shapes.extend(b.labels.into_iter().map(|l| Shape::Text {
-                                        at: l.at,
-                                        text: l.text,
-                                        height: l.height,
-                                        rotation: l.rotation,
-                                    }));
-                                    shapes
-                                }
-                                _ => {
-                                    return Err(
-                                        "Selection contains objects that cannot be exploded".into(),
-                                    )
-                                }
-                            };
+                                        .map(|l| Shape::text(l.at, l.text, l.height, l.rotation)),
+                                );
+                                shapes
+                            }
+                            _ => {
+                                return Err(
+                                    "Selection contains objects that cannot be exploded".into()
+                                )
+                            }
+                        };
                         for shape in shapes {
                             let mut new = e.clone();
                             new.id = self.doc.next_id + after.len() as u64;
@@ -731,7 +735,7 @@ impl Engine {
                                 if !self
                                     .doc
                                     .layer(value)
-                                    .is_some_and(|l| l.visible && !l.locked)
+                                    .is_some_and(|l| l.shown() && !l.locked)
                                 {
                                     return Err(
                                         "Destination layer is hidden, locked or missing".into()
@@ -800,9 +804,9 @@ impl Engine {
                     loop {
                         let before = used.len();
                         for name in used.clone() {
-                            if let Some(shapes) = settings.blocks.get(&name) {
-                                for s in shapes {
-                                    if let Shape::Insert { block, .. } = s {
+                            if let Some(entities) = settings.blocks.get(&name) {
+                                for e in entities {
+                                    if let Shape::Insert { block, .. } = &e.shape {
                                         used.insert(block.clone());
                                     }
                                 }
@@ -812,7 +816,9 @@ impl Engine {
                             break;
                         }
                     }
-                    settings.blocks.retain(|name, _| used.contains(name));
+                    // Anonymous blocks belong to dimensions, tables and hatches; keep them.
+                    std::sync::Arc::make_mut(&mut settings.blocks)
+                        .retain(|name, _| used.contains(name) || name.starts_with('*'));
                     settings.layers.retain(|l| {
                         l.name == "0"
                             || l.name == settings.current_layer
@@ -832,16 +838,7 @@ impl Engine {
         let mut chains = Vec::new();
         for e in &source {
             chains.push(match &e.shape {
-                Shape::Line { a, b } => vec![
-                    Vertex {
-                        point: *a,
-                        bulge: 0.0,
-                    },
-                    Vertex {
-                        point: *b,
-                        bulge: 0.0,
-                    },
-                ],
+                Shape::Line { a, b } => vec![Vertex::new(*a, 0.0), Vertex::new(*b, 0.0)],
                 Shape::Polyline {
                     vertices,
                     closed: false,

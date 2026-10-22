@@ -153,6 +153,21 @@ impl Transform {
             ..Self::IDENTITY
         }
     }
+    pub fn scale_xy(x: f64, y: f64) -> Self {
+        Self {
+            a: x,
+            d: y,
+            ..Self::IDENTITY
+        }
+    }
+    /// Linear part only (no translation).
+    pub fn linear(self) -> Self {
+        Self {
+            tx: 0.0,
+            ty: 0.0,
+            ..self
+        }
+    }
     pub fn rotation(base: Point, angle: f64, scale: f64) -> Self {
         let (s, c) = angle.sin_cos();
         Self::translation(base)

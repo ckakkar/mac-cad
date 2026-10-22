@@ -41,6 +41,10 @@ typealias ViewState<Value> = SwiftUI.State<Value>
     var showToolLabels: Bool { didSet { defaults.set(showToolLabels, forKey: "showToolLabels") } }
     var snapModes: Set<String> { didSet { defaults.set(Array(snapModes).sorted(), forKey: "snapModes") } }
     var polarIncrement: Double { didSet { defaults.set(polarIncrement, forKey: "polarIncrement") } }
+    /// Mouse wheel forward zooms in, as in AutoCAD; true reverses it (ZOOMWHEEL 1).
+    var reverseWheelZoom: Bool { didSet { defaults.set(reverseWheelZoom, forKey: "reverseWheelZoom") } }
+    /// Trackpad two-finger scrolling and Magic Mouse swipes pan by default; this makes them zoom.
+    var gestureScrollZooms: Bool { didSet { defaults.set(gestureScrollZooms, forKey: "gestureScrollZooms") } }
 
     private init() {
         let store = UserDefaults.standard
@@ -63,6 +67,8 @@ typealias ViewState<Value> = SwiftUI.State<Value>
         snapModes = store.object(forKey: "snapModes") == nil ? Self.defaultSnapModes : modes
         let increment = number("polarIncrement", 45, 1...90)
         polarIncrement = Self.polarIncrements.contains(increment) ? increment : 45
+        reverseWheelZoom = flag("reverseWheelZoom", false)
+        gestureScrollZooms = flag("gestureScrollZooms", false)
     }
 
     /// Model-space colors. AutoCAD shows white (ACI 7) objects as black on a light background.
@@ -113,6 +119,12 @@ private struct GeneralSettings: View {
             }
             Section("Palettes") {
                 Toggle("Show labels in Tool Sets", isOn: $settings.showToolLabels)
+            }
+            Section("Navigation") {
+                Toggle("Reverse mouse wheel zoom direction", isOn: $settings.reverseWheelZoom)
+                Toggle("Trackpad and Magic Mouse scrolling zooms instead of panning", isOn: $settings.gestureScrollZooms)
+                Text("A mouse wheel always zooms toward the cursor. Pinch zooms, two-finger double-tap zooms to extents, and middle- or Option-drag pans.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
             Section {
                 Text("Window, palette and command line layout follow each drawing window. Drawing units and layers are saved with each drawing.")
