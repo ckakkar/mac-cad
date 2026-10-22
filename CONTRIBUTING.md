@@ -7,7 +7,9 @@ Cargo.lock, Package.resolved and the LibreDWG tarball checksum pin dependencies.
 Run `make check`: formatting, clippy, geometry/editing/exchange/ABI tests, release
 app build, Swift/C/Rust bridge, bundle architecture/signature/linkage/notices, and
 an app integration check. The latter needs a graphical macOS session and Metal.
-It exercises NSDocument safe saves/reopen, recovery payloads, scene buffers, the
+It also runs the actual command field editor and sequential drafting/editing
+workflows (Space/Return, repetition, selection, numeric input, options, cancellation,
+text and compound objects). It exercises NSDocument safe saves/reopen, recovery payloads, scene buffers, the
 Metal pipeline, PDF and bundled DWG imports using upstream 2000/2013/2018 fixtures.
 
 Test UI changes in the actual app: gestures/numeric input, cancellation, selection,

@@ -6,6 +6,7 @@ struct InspectorView:View {
     private let types = ["Continuous","Dashed","Hidden","Center","Dotted"]
     var body:some View{
         VStack(alignment:.leading,spacing:0){
+            if model.showLayers {
             HStack{Text("Layers").font(.system(size:12,weight:.semibold));Spacer();Text("\(model.layers.count)").font(.caption).foregroundStyle(.secondary)}.padding(12)
             HStack(spacing:12){layerAction("Isolate","square.stack.3d.up","LAYISO");layerAction("Show all","eye","LAYUNISO");layerAction("Lock","lock","LAYLOCK");layerAction("Unlock all","lock.open","LAYUNLOCK")}.padding(.horizontal,12).padding(.bottom,8)
             Picker("Current",selection:Binding(get:{model.currentLayer},set:{model.layer($0,values:["current":true])})){ForEach(model.layers){l in Text(l.name).tag(l.name)}}.font(.system(size:11)).padding(.horizontal,10)
@@ -22,8 +23,9 @@ struct InspectorView:View {
                 HStack{Text("Linetype").foregroundStyle(.secondary);Spacer();Picker("Linetype",selection:Binding(get:{l.line_type},set:{model.layer(l.name,values:["line_type":$0])})){ForEach(types,id:\.self){Text($0)}}.labelsHidden()}.font(.system(size:10)).padding(.horizontal,12)
                 HStack{Text("Weight").foregroundStyle(.secondary);Spacer();Picker("Weight",selection:Binding(get:{(Double(l.line_weight)*100).rounded()/100},set:{model.layer(l.name,values:["line_weight":$0])})){ForEach([0.0,0.09,0.13,0.18,0.25,0.35,0.5,0.7,1.0,2.11],id:\.self){Text(String(format:"%.2f mm",$0)).tag($0)}}.labelsHidden()}.font(.system(size:10)).padding(.horizontal,12).padding(.bottom,10)
             }
+            }
             Divider()
-            ScrollView{VStack(alignment:.leading,spacing:12){
+            if model.showProperties {ScrollView{VStack(alignment:.leading,spacing:12){
                 Text("Properties").font(.system(size:12,weight:.semibold))
                 Text(model.selectionDescription).font(.system(size:10)).foregroundStyle(.secondary).textSelection(.enabled)
                 if !model.selection.isEmpty {
@@ -38,7 +40,7 @@ struct InspectorView:View {
                 Divider()
                 Picker("Units",selection:Binding(get:{model.units},set:{model.execute("UNITS \($0)")})){ForEach(["mm","cm","m","in","ft"],id:\.self){Text($0)}}
                 Text("\(model.entityCount.formatted()) objects · \(model.selection.count) selected").foregroundStyle(.secondary)
-            }.font(.system(size:11)).padding(12)}
+            }.font(.system(size:11)).padding(12)}}
         }
     }
     private var entity:[String:Any]{model.selectionData.first ?? [:]}

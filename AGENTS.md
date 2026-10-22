@@ -38,6 +38,25 @@ Agreed initial defaults:
 - Prefer focused modules over a single growing application or engine source file.
   Keep build scripts reproducible and dependencies pinned with lockfiles.
 
+## AutoCAD-for-Mac interaction target
+
+The owner explicitly wants familiar AutoCAD-for-Mac 2D features and workflows.
+Maintain `docs/AUTOCAD_PARITY.md` as a truthful behavior/feature inventory. Do not
+call the application a complete clone or declare full parity while gaps remain.
+
+- Space and Return accept command inputs and repeat the previous command when
+  idle. Annotation text must retain spaces; other native text fields must keep
+  normal macOS editing behavior.
+- Support prompted, cancellable command sessions, both preselection and selection
+  after invocation, exact numeric/relative/polar input, context-specific options,
+  defaults, history and completion. Route toolbar/menu/keyboard paths consistently.
+- Command sessions contain transient prompts and points only; Rust owns committed
+  geometry, document selection, validation, file semantics and undo/redo.
+- Serially process input and selection changes. Validate before advancing prompts;
+  failed operations keep their current prompt and leave committed geometry intact.
+- Verify actual native field editors and command sequences, not only isolated
+  handlers. Use Autodesk's public Mac documentation as the behavior reference.
+
 ## Milestones
 
 1. Foundation: native app, Rust workspace, bridge, licensing, build scripts, CI.

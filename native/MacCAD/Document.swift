@@ -22,7 +22,8 @@ let nativeDocumentType = "xyz.ckakkar.maccad.drawing"
         window.contentView = NSHostingView(rootView:WorkspaceView(model:editor))
         window.setFrameAutosaveName("MacCAD.Workspace")
         window.center()
-        let controller = NSWindowController(window:window)
+        let controller = DrawingWindowController(window:window)
+        window.delegate = controller
         addWindowController(controller)
         if imported { updateChangeCount(.changeDone) }
     }
@@ -54,11 +55,17 @@ let nativeDocumentType = "xyz.ckakkar.maccad.drawing"
     @objc func zoomExtents(_ sender: Any?) { editor.fitView?() }
     @objc func cancelCommand(_ sender: Any?) { editor.cancel() }
     @objc func startTool(_ sender:NSMenuItem){if let raw = sender.representedObject as? String,let tool = Tool(rawValue:raw){editor.choose(tool)}}
-    @objc func runCADCommand(_ sender:NSMenuItem){if let command = sender.representedObject as? String{editor.execute(command)}}
+    @objc func runCADCommand(_ sender:NSMenuItem){if let command = sender.representedObject as? String{editor.runFromMenu(command)}}
     @objc func copy(_ sender:Any?){editor.copySelection()}
     @objc func cut(_ sender:Any?){editor.copySelection(cut:true)}
     @objc func paste(_ sender:Any?){editor.pasteSelection()}
-    @objc func toggleCommandHistory(_ sender:Any?){editor.showCommandHistory.toggle()}
+    @objc func toggleCommandHistory(_ sender:Any?){editor.showCommandLine.toggle()}
+    @objc func toggleTools(_ sender:Any?){editor.showTools.toggle()}
+    @objc func toggleLayers(_ sender:Any?){editor.showLayers.toggle()}
+    @objc func toggleStatus(_ sender:Any?){editor.showStatus.toggle()}
+    @objc func regenerate(_ sender:Any?){editor.invalidate?()}
+    @objc func zoomIn(_ sender:Any?){editor.zoomBy?(2)}
+    @objc func zoomOut(_ sender:Any?){editor.zoomBy?(0.5)}
     @objc func toggleProperties(_ sender:Any?){editor.showProperties.toggle()}
     @objc func toggleOrtho(_ sender:Any?){editor.ortho.toggle();if editor.ortho{editor.polar = false}}
     @objc func exportDXF(_ sender: Any?) {

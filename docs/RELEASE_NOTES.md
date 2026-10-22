@@ -1,29 +1,32 @@
-MacCAD is an open-source, native 2D drafting preview for Apple Silicon and macOS 14+.
-Download **MacCAD.dmg**, open it and drag the app into Applications.
+MacCAD 0.3 adds familiar command-driven drafting workflows. Apple Silicon, macOS 14+.
+Download MacCAD.dmg and drag the app into Applications.
 
-- New workspace with grouped tools, editable object properties, searchable layers,
-  command history, completion and native drawing/editing menus.
-- Ellipses, splines, polygons, points, multiline text, radial dimensions and leaders.
-- Window/crossing selection, fillet/chamfer, arrays, join/break/stretch, expanded
-  offsets, cross-document clipboard and improved object snapping.
-- Entity/layer colors, linetypes and lineweights; configurable PDF paper, scale,
-  orientation, color and selection-only output.
-- Bundled LibreDWG import: no separate Homebrew install needed. Expanded DXF subset
-  and visible conversion/import reports. Native version 1 files migrate to version 2.
-- Signed Sparkle updates, checksums and complete corresponding source. The private
-  update-signing key remains in the owner's local Keychain.
+- Space/Return starts commands, accepts prompted values and repeats the previous
+  command when idle. Annotation text retains spaces; normal native text fields
+  retain macOS editing behavior.
+- Select objects before or after starting modify commands. Additive selection,
+  Shift removal and All/Last/Previous selection prompts.
+- Continuing LINE with Close/Undo, absolute/relative Cartesian and polar entry,
+  direct distances, circle 2P/3P/diameter and polygon construction options.
+- Editable cursor input, sequential text height/rotation/content, transforms,
+  offset side, line corner edits, erase/join/explode/break, arrays and static blocks.
+- Contextual prompts/defaults, serialized input, invalid-input recovery, history,
+  cycling completion, CAD control/function keys, palette toggles and view commands.
+- ZOOM Extents/Window/Previous/factor, PAN, middle-button navigation and a right-click
+  Enter/Repeat menu.
 
-**Limits:** this release does not provide all AutoCAD for Mac 2D capabilities.
-DWG saving, layouts, external references, dynamic blocks, associative annotations,
-rich hatch/font fidelity and scripting are not implemented. DWG import remains
-experimental and DXF exchange is lossy; review reports and compare with originals.
-See the repository compatibility matrix before production use.
+Verification: 32 core tests; native command-field/workflow checks plus existing
+bridge, save/reopen, recovery-payload, Metal/PDF and bundled DWG fixture checks.
+Signed update feed/archive, checksums and corresponding source are included. The
+private Sparkle signing key stays in the owner's local macOS Keychain.
 
-**Verification:** 30 Rust tests and native Swift/C/Rust bridge, bundle/signature,
-NSDocument save/reopen, recovery-payload, Metal/PDF checks, plus bundled import of
-upstream LibreDWG 2000/2013/2018 line fixtures. Professional corpus fidelity,
-force-quit recovery and baseline-M1 frame rates remain unqualified.
+This is still a 2D drafting preview, **not a complete AutoCAD clone**. General curve
+trimming, grips, rich annotations, complex hatches, layouts/viewports, xrefs,
+DWG export and scripting are unfinished. Command option coverage is partial; see
+AUTOCAD_PARITY.md and COMPATIBILITY.md in the repository. DWG import remains
+experimental and exchange is lossy. Cursor input currently uses command-line
+coordinate rules: use @ explicitly for relative values.
 
-**First launch:** this build is ad-hoc signed, not Apple-notarized. macOS may require
-Open Anyway in System Settings → Privacy & Security. Sparkle update signatures
-are separate from Apple Developer ID signing.
+The app is ad-hoc signed, not Apple-notarized. First launch may require Open Anyway
+in System Settings → Privacy & Security. Update signatures are separate from Apple
+Developer ID signing; installation on a second Mac still needs qualification.

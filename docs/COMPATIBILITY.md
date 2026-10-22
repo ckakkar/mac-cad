@@ -1,14 +1,16 @@
 # Compatibility and release gates
 
-This describes implemented behavior, not AutoCAD parity. Generated tests and three
+This describes implemented behavior, not AutoCAD parity. See the detailed
+[behavior/feature audit](AUTOCAD_PARITY.md). Generated tests and three
 upstream DWG line fixtures exercise the subset; no professional corpus is qualified.
 
 | Capability | Current behavior |
 | --- | --- |
 | Native documents | Version 2 JSON `.maccad`; version 1 migrates; geometry, entity properties, units, layers, static blocks; coordinated saves and autosave |
+| Command workflow | Space/Return accept/repeat, prompted selection and values, Close/Undo, relative/polar input, editable cursor input, history/completion; option coverage is partial |
 | Drafting | Lines, zero-width bulged polylines, rectangles, regular polygons, circles, center/start/sweep and three-point arcs, points, ellipses |
 | Splines | Rational B-spline evaluation/import; SPLINE creates clamped control-point curves, not fit-point interpolation |
-| Selection | Click/Shift-click, containing window and crossing window, select all/similar; hidden/locked layers excluded |
+| Selection | Additive click/Shift removal, containing/crossing windows, All/Last/Previous prompts, select all/similar; hidden/locked layers excluded |
 | Transforms | Move/copy/rotate, uniform positive scale, mirror-copy, erase, undo/redo |
 | Offset | Lines, circles, arcs and straight polylines; signed distance, source properties retained; no curved polyline or self-intersection cleanup |
 | Trim/extend | Lines against a supplied infinite line boundary; not general curve/boundary trimming |

@@ -13,7 +13,7 @@ Privacy & Security. Updates are signed with MacCAD's own Sparkle key.
 **Drafting preview.** MacCAD has useful drawing and editing tools, but does not yet
 have all of AutoCAD for Mac's 2D capabilities. DWG import is experimental; DWG
 saving, layouts, external references and full annotation fidelity are still missing.
-See the [compatibility matrix](docs/COMPATIBILITY.md) before using production drawings.
+See the [compatibility matrix](docs/COMPATIBILITY.md) and [AutoCAD parity audit](docs/AUTOCAD_PARITY.md) before using production drawings.
 
 ## Drawing
 
@@ -26,18 +26,21 @@ inspector. Open the example plan from an empty document to try it.
 - Move, copy, rotate, scale, mirror, offset, trim, extend, fillet, chamfer, join,
   break, stretch, array and explode objects. Edit geometry, color, linetype,
   lineweight and layer in Properties. Changes participate in undo/redo.
-- Click to select; Shift-click adds/removes. Drag left to right for a containing
+- Click adds to selection; Shift-click removes. Drag left to right for a containing
   window, or right to left for crossing selection. Hidden/locked objects are excluded.
-- Enter a tool name (`LINE`, `CIRCLE`, etc.), then click or enter `x,y` coordinates,
-  `@dx,dy` relative coordinates, or supported scalar values. Full numeric commands
+- Enter a tool name (`LINE`, `CIRCLE`, etc.) and press **Space or Return**, then click or enter `x,y` coordinates,
+  `@dx,dy` relative coordinates, `@distance<angle` polar input, or scalar values. Full numeric commands
   work too: `LINE 0,0 3000,0`, `ROTATE 0,0 90`.
 - Up/Down recalls command history; Tab completes names. Escape cancels a gesture;
-  Return finishes a polyline/spline. ⌘3 toggles history, ⌘5 toggles Properties.
+  Return/Space finishes a path and repeats the last command when idle. Annotation
+  prompts retain spaces. ⌘3 toggles the command window; ⌘5 toggles Properties.
 - Trackpad: two-finger pan, pinch to zoom. Mouse: wheel zoom, Option-drag pan.
-  ⌘0 fits the drawing. F3 toggles snaps; F8 toggles ortho.
+  ⌘0 fits the drawing. F3 toggles object snaps; F8 toggles ortho; F12 toggles
+  editable cursor input. F2/F7/F9/F10 control history/grid/grid snap/polar.
 - ⌘Z / ⇧⌘Z undo/redo; ⌘A selects editable objects; ⌘C/⌘X/⌘V copy/cut/paste
   MacCAD objects between drawings. Units are explicit; changing units does not rescale.
 
+Modify commands accept preselection or prompt for objects after invocation.
 The question-mark button opens the command reference. See [USAGE.md](USAGE.md)
 for examples and the limits of each editing operation.
 

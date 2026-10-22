@@ -8,6 +8,7 @@ import MetalKit
         do {
             try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
             defer { try? FileManager.default.removeItem(at:directory) }
+            try await CommandSmoke.run()
             let original = DrawingDocument()
             let core = original.core
             for c in ["LINE 0,0 5000,0","CIRCLE 2500,2000 800","TEXT 1000,1000 150 Living room","DIMALIGNED 0,0 5000,0 -400","HATCH solid 200 0,0 1000,0 1000,500 0,500"] { _ = try await core.request(["op":"command","text":c]) }

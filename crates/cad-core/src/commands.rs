@@ -413,6 +413,10 @@ impl Engine {
                     return Err("Invalid pick point/tolerance".into());
                 }
                 let id = self.pick(p, tol);
+                if let Some(mode) = v["mode"].as_str() {
+                    self.apply_selection(id.into_iter().collect(), mode)?;
+                    return Ok(self.state());
+                }
                 if !v["extend"].as_bool().unwrap_or(false) {
                     self.selected.clear();
                 }
@@ -441,6 +445,18 @@ impl Engine {
                     .values()
                     .filter(|e| self.editable(e))
                     .map(|e| e.id)
+                    .collect();
+                Ok(self.state())
+            }
+            "select_last" => {
+                self.selected = self
+                    .doc
+                    .entities
+                    .values()
+                    .rev()
+                    .find(|e| self.editable(e))
+                    .map(|e| e.id)
+                    .into_iter()
                     .collect();
                 Ok(self.state())
             }
@@ -664,11 +680,20 @@ impl Engine {
                 }
                 self.transform(Transform::rotation(point(0)?, 0.0, scale), false)
             }
-            "MI" | "MIRROR" => self.transform(
-                Transform::mirror(point(0)?, point(1)?)
-                    .ok_or("Mirror axis needs two distinct points")?,
-                true,
-            ),
+            "MI" | "MIRROR" => {
+                if args.get(2).is_some_and(|v| {
+                    !v.eq_ignore_ascii_case("keep") && !v.eq_ignore_ascii_case("delete")
+                }) {
+                    return Err("MIRROR axis-x,y axis-x,y [keep|delete]".into());
+                }
+                self.transform(
+                    Transform::mirror(point(0)?, point(1)?)
+                        .ok_or("Mirror axis needs two distinct points")?,
+                    !args
+                        .get(2)
+                        .is_some_and(|v| v.eq_ignore_ascii_case("delete")),
+                )
+            }
             "O" | "OFFSET" => {
                 let distance = number(0)?;
                 let mut shapes = Vec::new();

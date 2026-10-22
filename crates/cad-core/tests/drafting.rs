@@ -404,3 +404,61 @@ fn assert_near(a: &Value, b: &Value) {
         _ => assert_eq!(a, b),
     }
 }
+
+#[test]
+fn command_selection_add_remove_and_invalid_mode_are_atomic() {
+    let mut e = Engine::default();
+    run(&mut e, "LINE 0,0 10,0");
+    run(&mut e, "LINE 0,20 10,20");
+    for y in [0, 20, 0] {
+        e.dispatch(json!({"op":"pick","point":{"x":5,"y":y},"tolerance":1,"mode":"add"}))
+            .unwrap();
+    }
+    assert_eq!(e.selected.len(), 2);
+    e.dispatch(json!({"op":"pick","point":{"x":5,"y":0},"tolerance":1,"mode":"remove"}))
+        .unwrap();
+    assert_eq!(e.selected.iter().copied().collect::<Vec<_>>(), vec![2]);
+    let before = e.selected.clone();
+    assert!(e
+        .dispatch(json!({"op":"pick","point":{"x":5,"y":0},"tolerance":1,"mode":"bad"}))
+        .is_err());
+    assert_eq!(before, e.selected);
+    e.dispatch(json!({"op":"select_window","bounds":{"min":{"x":0,"y":0},"max":{"x":10,"y":20}},"mode":"remove"})).unwrap();
+    assert!(e.selected.is_empty());
+    e.dispatch(json!({"op":"select_last"})).unwrap();
+    assert!(e.selected.contains(&2));
+}
+
+#[test]
+fn circle_constructions_offset_side_and_mirror_delete_are_validated() {
+    let mut e = Engine::default();
+    run(&mut e, "CIRCLE2 -10,0 10,0");
+    run(&mut e, "CIRCLE3 1,0 0,1 -1,0");
+    assert!(matches!(
+        e.doc.entities[&1].shape,
+        Shape::Circle { radius: 10.0, .. }
+    ));
+    assert!(matches!(
+        e.doc.entities[&2].shape,
+        Shape::Circle { radius: 1.0, .. }
+    ));
+    let before = e.doc.clone();
+    assert!(e.command("CIRCLE3 0,0 1,0 2,0").is_err());
+    assert_eq!(e.doc, before);
+    select(&mut e, &[1]);
+    run(&mut e, "OFFSET 2 0,0");
+    assert!(matches!(
+        e.doc.entities[&3].shape,
+        Shape::Circle { radius: 8.0, .. }
+    ));
+    run(&mut e, "LINE 1,0 2,0");
+    select(&mut e, &[4]);
+    run(&mut e, "OFFSET 5 0,-10");
+    assert!(matches!(e.doc.entities[&5].shape,Shape::Line{a,..} if a.y == -5.0));
+    select(&mut e, &[4]);
+    run(&mut e, "MIRROR 0,0 0,1 delete");
+    assert_eq!(e.doc.entities.len(), 5);
+    assert!(matches!(e.doc.entities[&4].shape,Shape::Line{a,..} if a.x == -1.0));
+    run(&mut e, "UNDO");
+    assert!(matches!(e.doc.entities[&4].shape,Shape::Line{a,..} if a.x == 1.0));
+}

@@ -13,6 +13,30 @@ use std::{
 };
 
 impl Engine {
+    pub(crate) fn apply_selection(&mut self, hits: Vec<u64>, mode: &str) -> Result<(), String> {
+        if !["replace", "add", "remove", "toggle"].contains(&mode) {
+            return Err("Invalid selection mode".into());
+        }
+        if mode == "replace" {
+            self.selected.clear();
+        }
+        for id in hits {
+            match mode {
+                "remove" => {
+                    self.selected.remove(&id);
+                }
+                "toggle" => {
+                    if !self.selected.insert(id) {
+                        self.selected.remove(&id);
+                    }
+                }
+                _ => {
+                    self.selected.insert(id);
+                }
+            }
+        }
+        Ok(())
+    }
     pub(crate) fn drafting_dispatch(&mut self, v: &Value) -> Option<Result<Value, String>> {
         let op = v["op"].as_str()?;
         if ![
@@ -65,6 +89,10 @@ impl Engine {
                         false
                     })
                     .collect();
+                if let Some(mode) = v["mode"].as_str() {
+                    self.apply_selection(hits, mode)?;
+                    return Ok(self.state());
+                }
                 if !v["extend"].as_bool().unwrap_or(false) {
                     self.selected.clear();
                 }
@@ -214,6 +242,8 @@ impl Engine {
         let args = &tokens[1..];
         if ![
             "POINT",
+            "CIRCLE2",
+            "CIRCLE3",
             "PO",
             "ELLIPSE",
             "EL",
@@ -269,6 +299,22 @@ impl Engine {
             let point = |i: usize| parse_point(args.get(i).ok_or("Missing coordinate (x,y)")?);
             let num = |i: usize| parse_number(args.get(i).ok_or("Missing numeric parameter")?);
             let shape = match name.as_str() {
+                "CIRCLE2" => {
+                    let a = point(0)?;
+                    let b = point(1)?;
+                    Some(Shape::Circle {
+                        center: (a + b) * 0.5,
+                        radius: a.distance(b) * 0.5,
+                    })
+                }
+                "CIRCLE3" => {
+                    let Shape::Arc { center, radius, .. } =
+                        arc_through(point(0)?, point(1)?, point(2)?)?
+                    else {
+                        unreachable!()
+                    };
+                    Some(Shape::Circle { center, radius })
+                }
                 "POINT" | "PO" => Some(Shape::Point { at: point(0)? }),
                 "ELLIPSE" | "EL" => {
                     let center = point(0)?;
@@ -426,9 +472,19 @@ impl Engine {
                 }
                 "OFFSET" | "O" => {
                     let distance = num(0)?;
+                    let side = if args.len() > 1 {
+                        Some(point(1)?)
+                    } else {
+                        None
+                    };
                     let mut after = self.selection()?;
                     for (i, e) in after.iter_mut().enumerate() {
                         e.id = self.doc.next_id + i as u64;
+                        let distance = if let Some(side) = side {
+                            distance.abs() * offset_side(&e.shape, side)?
+                        } else {
+                            distance
+                        };
                         e.shape =
                             match &e.shape {
                                 Shape::Line { a, b } => {
@@ -1027,4 +1083,43 @@ fn segment_hits_box(a: Point, b: Point, rect: Bounds) -> bool {
             false
         }
     })
+}
+
+fn offset_side(shape: &Shape, side: Point) -> Result<f64, String> {
+    let value = match shape {
+        Shape::Line { a, b } => (*b - *a).cross(side - *a),
+        Shape::Circle { center, radius } | Shape::Arc { center, radius, .. } => {
+            center.distance(side) - radius
+        }
+        Shape::Polyline { vertices, closed } => {
+            if vertices.iter().any(|v| v.bulge.abs() > EPS) {
+                return Err("Curved polyline offset is not supported".into());
+            }
+            let edges = polyline_edges(vertices, *closed);
+            edges
+                .iter()
+                .filter_map(|e| {
+                    if let Shape::Line { a, b } = e {
+                        let d = *b - *a;
+                        let n = d.dot(d);
+                        if n <= EPS {
+                            None
+                        } else {
+                            let p = *a + d * ((side - *a).dot(d) / n).clamp(0.0, 1.0);
+                            Some((p.distance(side), d.cross(side - *a)))
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .ok_or("No valid offset edge")?
+                .1
+        }
+        _ => return Err("Offset supports lines, circles, arcs and straight polylines".into()),
+    };
+    if value.abs() <= EPS {
+        return Err("Choose a point clearly on one side of the object".into());
+    }
+    Ok(value.signum())
 }

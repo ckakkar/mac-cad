@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3 — Command workflows
+
+- Space/Return starts commands, accepts prompts and repeats the previous command;
+  annotation spaces and standard native text editing remain intact.
+- Add serialized transient command sessions shared by tools, menus and keyboard:
+  selection after invocation, defaults/options, line Close/Undo and command history.
+- Add editable cursor input, absolute/relative polar coordinates, circle 2P/3P and
+  diameter input, three-point arc default, ellipse axis construction and polygon
+  inscribed/circumscribed prompts.
+- Add prompted text height/rotation/content; move/copy/rotate/scale/mirror,
+  offset-side, corner edits, erase, join/explode/break, arrays and static blocks.
+- Make selection additive with Shift removal; support All/Last/Previous prompts,
+  cycling completion, CAD control shortcuts, view/palette toggles, grid snap,
+  ZOOM options, PAN and a right-click Enter/Repeat menu.
+- Verify keyboard/command sequences through the real native field editor and Rust
+  core, plus 32 core tests and existing app/bundle/DWG integration checks.
+- Add an explicit AutoCAD-for-Mac parity audit; major 2D capabilities remain missing.
+
 ## 0.2 — Drafting preview
 
 - Rework the workspace around grouped tools, native Draw/Dimension/Modify menus,

@@ -1,8 +1,8 @@
-# 0.2 verification record
+# 0.3 verification record
 
 Local environment: Apple M2, 16 GiB RAM, macOS 27.0.1, arm64 release builds.
 
-`make check` passes Rust formatting and clippy with warnings denied, 30 core tests,
+`make check` passes Rust formatting and clippy with warnings denied, 32 core tests,
 Swift/C/Rust draw/select/move/undo/redo/save/reopen, and packaged app verification
 (plist, arm64, nested signatures, linkage and license notices). App integration
 exercises coordinated NSDocument save/reopen, recovery payloads, worker queues,
@@ -15,8 +15,16 @@ geometry, corner-edit atomicity, arrays/history, window/crossing selection,
 intersection/perpendicular/tangent snaps, clipboard block-name collisions,
 format migration, DXF geometry/styles/preview handling and bounded block expansion.
 The native example plan and numeric ellipse entry were also exercised in the UI.
+CommandSmoke additionally executes the actual command field editor and prompted
+sequences: Space/Return/repeat, selection, line Close/Undo, polar coordinates,
+circle constructions, text spaces/rotation, polygon, interruption, error recovery,
+zoom, offset side, blocks/insert, arrays, join/explode/break, cancellation, function
+keys, completion and isolation from ordinary native text fields. Manual native UI
+checks confirmed L + Space starts LINE, coordinates + Space create a segment,
+blank Space repeats LINE, and text Space preserves “Living room” before Return
+completes the annotation.
 
-## CPU benchmark
+## CPU benchmark (0.2 geometry/render baseline)
 
 One local release-mode run of `make bench`, generated LINE-only fixtures, single
 Rust process; validation/index and full-scene construction timed separately.

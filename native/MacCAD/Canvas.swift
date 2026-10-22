@@ -105,7 +105,10 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
     private let overlay = CanvasOverlay()
     private var renderer: MetalDrawing?
     var camera = Camera()
-    var points: [CADPoint] = []
+    var points:[CADPoint] {model.session.points}
+    private let dynamicField:CADCommandField
+    private let dynamicPrompt = NSTextField(labelWithString: "")
+    private var viewHistory:[Camera] = []
     var cursor = CADPoint.zero
     var snapKind = "none"
     private var scene = Scene()
@@ -121,23 +124,36 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
     private var extendSelection = false
     private var gestureGeneration = 0
     override var acceptsFirstResponder: Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { bounds.contains(point) ? self : nil }
+    override func hitTest(_ point:NSPoint)->NSView? {
+        if !dynamicField.isHidden,dynamicField.frame.contains(point){return dynamicField.hitTest(convert(point,to:dynamicField))}
+        return bounds.contains(point) ? self:nil
+    }
 
     init(model: EditorModel) {
-        self.model = model
+        self.model = model;dynamicField = CADCommandField(model:model)
         super.init(frame: .zero)
-        addSubview(metal); addSubview(overlay); overlay.canvas = self
+        addSubview(metal); addSubview(overlay);overlay.canvas = self
+        dynamicField.isHidden = true;dynamicField.isBordered = true;dynamicField.drawsBackground = true;dynamicField.backgroundColor = .textBackgroundColor;dynamicField.setAccessibilityLabel("Dynamic CAD input")
+        dynamicPrompt.font = .monospacedSystemFont(ofSize:10,weight:.regular);dynamicPrompt.textColor = .labelColor;dynamicPrompt.backgroundColor = .controlBackgroundColor;dynamicPrompt.drawsBackground = true;dynamicPrompt.isHidden = true
+        addSubview(dynamicPrompt);addSubview(dynamicField)
         do { renderer = try MetalDrawing(view: metal) } catch { model.show(error) }
         setAccessibilityElement(true); setAccessibilityRole(.group); setAccessibilityLabel("Drawing canvas")
         model.invalidate = { [weak self] in self?.refresh(force: true) }
-        model.cancelGesture = { [weak self] in self?.gestureGeneration += 1; self?.points = []; self?.selectionStart = nil; self?.selectionEnd = nil; self?.snapKind = "none"; self?.overlay.needsDisplay = true }
+        model.cancelGesture = { [weak self] in self?.gestureGeneration += 1; self?.selectionStart = nil; self?.selectionEnd = nil; self?.snapKind = "none"; self?.overlay.needsDisplay = true }
         model.fitView = { [weak self] in self?.fit() }
-        model.acceptCoordinate = { [weak self] p, relative in
-            guard let self else {return}
-            self.accept(relative ? (self.points.last ?? .zero)+p : p)
+        model.acceptCoordinate = {[weak self] p,relative in guard let self else{return};self.model.enterPoint(relative ? (points.last ?? .zero)+p:p)}
+        model.finishGesture = {[weak model] in model?.execute("")}
+        model.acceptScalar = {[weak model] in model?.execute(String($0))}
+        model.syncInput = {[weak self] in self?.dynamicField.synchronize();self?.model.syncCommandBar?();self?.updateDynamicInput()}
+        model.focusCommand = {[weak self] in
+            guard let self else{return}
+            if self.model.dynamicInput {updateDynamicInput(force:true);dynamicField.focus()}
+            else {self.model.showCommandLine = true;self.model.focusCommandBar?()}
         }
-        model.finishGesture = { [weak self] in self?.completePath() }
-        model.acceptScalar = { [weak self] value in self?.scalar(value) }
+        model.zoomBy = {[weak self] amount in self?.zoomCentered(amount)}
+        model.fitWindow = {[weak self] b in guard let self else{return};rememberView();camera.fit(b,size:bounds.size);refresh(force:true)}
+        model.previousView = {[weak self] in guard let self,let previous = viewHistory.popLast() else{return};camera = previous;refresh(force:true)}
+
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
     override func layout() { super.layout(); metal.frame = bounds; overlay.frame = bounds; refresh(force: true) }
@@ -146,10 +162,11 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
         let t = NSTrackingArea(rect: .zero, options: [.activeInKeyWindow,.mouseMoved,.mouseEnteredAndExited,.inVisibleRect], owner: self); addTrackingArea(t); tracking = t
     }
     func fit() {
-        Task { if let b = await model.extents() { camera.fit(b, size: bounds.size); refresh(force: true) } }
+        Task { if let b = await model.extents() { rememberView();camera.fit(b, size: bounds.size); refresh(force: true) } }
     }
     func refresh(force: Bool = false) {
         renderer?.camera = camera; renderer?.size = bounds.size
+        updateDynamicInput()
         metal.needsDisplay = true; overlay.needsDisplay = true
         guard bounds.width > 0, bounds.height > 0 else { return }
         let visible = camera.bounds(size: bounds.size)
@@ -188,7 +205,8 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
         }
     }
     func constrained(_ p: CADPoint) -> CADPoint {
-        guard let base = points.last else { return p }
+        guard let base = points.last else { return model.gridSnap ? CADPoint(x:(p.x/model.snapSpacing).rounded()*model.snapSpacing,y:(p.y/model.snapSpacing).rounded()*model.snapSpacing):p }
+        let p = model.gridSnap ? CADPoint(x:(p.x/model.snapSpacing).rounded()*model.snapSpacing,y:(p.y/model.snapSpacing).rounded()*model.snapSpacing):p
         let delta = p-base
         if model.ortho { return abs(delta.x) >= abs(delta.y) ? CADPoint(x:p.x,y:base.y) : CADPoint(x:base.x,y:p.y) }
         if model.polar { let angle = (atan2(delta.y,delta.x)/(.pi/4)).rounded()*(.pi/4); let radius = hypot(delta.x,delta.y); return base+CADPoint(x:cos(angle),y:sin(angle))*radius }
@@ -196,9 +214,9 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
     }
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        if event.modifierFlags.contains(.option) { isPanning = true; return }
+        if event.modifierFlags.contains(.option) || model.tool == .pan { isPanning = true;rememberView(); return }
         let p = camera.world(convert(event.locationInWindow, from:nil),size:bounds.size)
-        if model.tool == .select { selectionStart = p; selectionEnd = nil; extendSelection = event.modifierFlags.contains(.shift); return }
+        if model.selecting { selectionStart = p; selectionEnd = nil; extendSelection = event.modifierFlags.contains(.shift); return }
         let generation = gestureGeneration
         Task {
             var q = constrained(p)
@@ -206,74 +224,34 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
             if generation == gestureGeneration { accept(q, shift: event.modifierFlags.contains(.shift)) }
         }
     }
-    func accept(_ p: CADPoint, shift: Bool = false) {
-        if model.tool == .select { model.operation(["op":"pick","point":p.json,"tolerance":7/camera.scale,"extend":shift]); return }
-        points.append(p); cursor = p
-        switch model.tool {
-        case .line where points.count == 2: finish("LINE \(points[0].command) \(p.command)"); points = [p]
-        case .rectangle where points.count == 2, .hatch where points.count == 2:
-            let a = points[0]
-            if model.tool == .hatch { finish("HATCH diagonal \(max(a.distance(p)/30,0.01)) \(a.command) \(CADPoint(x:p.x,y:a.y).command) \(p.command) \(CADPoint(x:a.x,y:p.y).command)") }
-            else { finish("RECT \(a.command) \(p.command)") }
-        case .circle where points.count == 2: finish("CIRCLE \(points[0].command) \(points[0].distance(p))")
-        case .point: finish("POINT \(p.command)")
-        case .ellipse where points.count == 3:
-            let center = points[0]; let major = points[1]-center; let axis = major.distance(.zero)
-            guard axis > 1e-9 else { points = []; return }
-            let d = p-center; let minor = abs((-major.y*d.x+major.x*d.y)/axis)
-            finish("ELLIPSE \(center.command) \(points[1].command) \(min(minor/axis,1))")
-        case .polygon where points.count == 2:
-            let sides = promptNumber("Polygon","Number of sides","6")
-            if let sides { finish("POLYGON \(sides) \(points[0].command) \(points[0].distance(p))") } else { points = [] }
-        case .arc where points.count == 3:
-            let c = points[0]; let a = points[1]-c; let b = p-c
-            let start = atan2(a.y,a.x)*180 / .pi
-            let sweep = (atan2(b.y,b.x)*180 / .pi-start+360).truncatingRemainder(dividingBy:360)
-            finish("ARC \(c.command) \(hypot(a.x,a.y)) \(start) \(sweep)")
-        case .dimension where points.count == 3:
-            let a = points[0], b = points[1]; let d = b-a
-            let offset = ((p.x-a.x)*(-d.y)+(p.y-a.y)*d.x)/hypot(d.x,d.y)
-            finish("DIMALIGNED \(a.command) \(b.command) \(offset)")
-        case .radius where points.count == 3: finish("DIMRADIUS \(points[0].command) \(points[1].command) \(p.command)")
-        case .leader where points.count == 2:
-            let alert = NSAlert();alert.messageText = "Leader text";let field = NSTextField(string:"Note");field.frame = NSRect(x:0,y:0,width:300,height:26);alert.accessoryView = field;alert.addButton(withTitle:"Add");alert.addButton(withTitle:"Cancel")
-            if alert.runModal() == .alertFirstButtonReturn { finish("LEADER \(points[0].command) \(p.command) \(textHeight) \(field.stringValue)") } else {points = []}
-        case .rotate, .scale:
-            if let value = promptNumber(model.tool.title,model.tool == .rotate ? "Rotation angle in degrees" : "Positive scale factor",model.tool == .rotate ? "90" : "2") {scalar(value)} else {points = []}
-        case .mirror where points.count == 2: finish("MIRROR \(points[0].command) \(p.command)"); model.tool = .select
-        case .trim where points.count == 3, .extend where points.count == 3:
-            finish("\(model.tool == .trim ? "TRIM" : "EXTEND") \(points[0].command) \(points[1].command) \(p.command)");model.tool = .select
-        case .measure where points.count == 2:
-            model.message = String(format:"Distance %.4f %@ · ΔX %.4f · ΔY %.4f",points[0].distance(p),model.units,p.x-points[0].x,p.y-points[0].y);model.commandHistory.append(model.message);points = []
-        case .move where points.count == 2, .copy where points.count == 2: finish("\(model.tool == .move ? "MOVE" : "COPY") \((p-points[0]).command)")
-        case .text:
-            let alert = NSAlert(); alert.messageText = "Add text"
-            let field = NSTextField(string: "Room name"); field.frame = NSRect(x:0,y:0,width:300,height:26); alert.accessoryView = field
-            alert.addButton(withTitle:"Add"); alert.addButton(withTitle:"Cancel")
-            if alert.runModal() == .alertFirstButtonReturn { finish("TEXT \(p.command) \(textHeight) \(field.stringValue)") } else { points = [] }
-        default: break
+    func accept(_ p:CADPoint,shift:Bool = false) {model.enterPoint(p);overlay.needsDisplay = true}
+    func completePath() {model.execute("")}
+    private func rememberView() {viewHistory.append(camera);if viewHistory.count>32{viewHistory.removeFirst()}}
+    private func zoomCentered(_ amount:Double) {rememberView();camera.scale = min(max(camera.scale*amount,1e-8),1e8);refresh(force:true)}
+    private func updateDynamicInput(force:Bool = false) {
+        let visible = model.dynamicInput && (force || model.session.active || !model.commandText.isEmpty)
+        if !model.dynamicInput,dynamicField.currentEditor() != nil {window?.makeFirstResponder(self)}
+        dynamicField.isHidden = !visible;dynamicPrompt.isHidden = !visible
+        guard visible else{return}
+        dynamicField.synchronize();dynamicPrompt.stringValue = model.session.active ? model.session.prompt:"Command:"
+        if dynamicField.currentEditor() == nil || force {
+            let p = camera.screen(cursor,size:bounds.size)
+            let x = min(max(p.x+18,8),max(8,bounds.width-360)),y = min(max(p.y-58,8),max(8,bounds.height-60))
+            dynamicPrompt.frame = NSRect(x:x,y:y+27,width:350,height:22);dynamicField.frame = NSRect(x:x,y:y,width:190,height:25)
         }
-        overlay.needsDisplay = true
     }
-    func finish(_ text: String) { points = []; model.execute(text); overlay.needsDisplay = true }
-    var textHeight: Double { ["mm":150,"cm":15,"m":0.15,"in":6,"ft":0.5][model.units] ?? 150 }
-    func promptNumber(_ title: String,_ detail: String,_ value: String) -> Double? {
-        let alert = NSAlert();alert.messageText = title;alert.informativeText = detail
-        let field = NSTextField(string:value);field.frame = NSRect(x:0,y:0,width:240,height:26);alert.accessoryView = field;alert.addButton(withTitle:"Apply");alert.addButton(withTitle:"Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn, let value = Double(field.stringValue), value.isFinite else { return nil };return value
+    override func rightMouseDown(with event:NSEvent) {
+        let menu = NSMenu()
+        func action(_ title:String,_ selector:Selector){let item = NSMenuItem(title:title,action:selector,keyEquivalent:"");item.target = self;menu.addItem(item)}
+        action(model.session.active ? "Enter":"Repeat \(model.lastCommand ?? "Command")",#selector(enterCommand))
+        action("Cancel",#selector(cancelCurrent));menu.addItem(.separator());action("Undo",#selector(undoCommand))
+        NSMenu.popUpContextMenu(menu,with:event,for:self)
     }
-    func scalar(_ value: Double) {
-        guard value.isFinite else {return}
-        if model.tool == .circle, points.count == 1 {finish("CIRCLE \(points[0].command) \(value)")}
-        else if model.tool == .rotate || model.tool == .scale, let base = points.first {finish("\(model.tool.rawValue.uppercased()) \(base.command) \(value)"); model.tool = .select}
-        else if model.tool == .line, let base = points.last {let d = cursor-base;let p = base+d*(value/max(d.distance(.zero),1e-9));accept(p)}
-        else {model.message = "This tool needs a coordinate (x,y)"}
-    }
-    func completePath() {
-        if model.tool == .polyline, points.count >= 2 {finish("PLINE "+points.map(\.command).joined(separator:" "))}
-        else if model.tool == .spline, points.count >= 2 {finish("SPLINE "+points.map(\.command).joined(separator:" "))}
-        else {points = [];model.tool = .select;overlay.needsDisplay = true}
-    }
+    @objc private func enterCommand(){model.submit()}
+    @objc private func cancelCurrent(){model.cancel()}
+    @objc private func undoCommand(){model.execute("UNDO")}
+    override func otherMouseDown(with event:NSEvent){if event.buttonNumber == 2 {if event.clickCount == 2{fit()}else{isPanning = true;rememberView()}}}
+    override func otherMouseUp(with event:NSEvent){isPanning = false}
     override func mouseDragged(with event: NSEvent) {
         if isPanning { camera.center.x -= event.deltaX/camera.scale; camera.center.y += event.deltaY/camera.scale; refresh() }
         else if selectionStart != nil {selectionEnd = camera.world(convert(event.locationInWindow,from:nil),size:bounds.size);overlay.needsDisplay = true}
@@ -284,16 +262,17 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
         guard let start = selectionStart else {return};let end = selectionEnd
         selectionStart = nil;selectionEnd = nil;overlay.needsDisplay = true
         if let end, start.distance(end)*camera.scale>3 {
-            model.operation(["op":"select_window","bounds":["min":CADPoint(x:min(start.x,end.x),y:min(start.y,end.y)).json,"max":CADPoint(x:max(start.x,end.x),y:max(start.y,end.y)).json],"crossing":end.x<start.x,"extend":extendSelection])
-        } else {model.operation(["op":"pick","point":start.json,"tolerance":7/camera.scale,"extend":extendSelection])}
+            model.operation(["op":"select_window","bounds":["min":CADPoint(x:min(start.x,end.x),y:min(start.y,end.y)).json,"max":CADPoint(x:max(start.x,end.x),y:max(start.y,end.y)).json],"crossing":end.x<start.x,"extend":true,"mode":extendSelection ? "remove":"add"])
+        } else {model.operation(["op":"pick","point":start.json,"tolerance":7/camera.scale,"extend":true,"mode":extendSelection ? "remove":"add"])}
     }
-    override func otherMouseDragged(with event: NSEvent) { camera.center.x -= event.deltaX/camera.scale; camera.center.y += event.deltaY/camera.scale; refresh() }
+    override func otherMouseDragged(with event: NSEvent) { guard isPanning else{return};camera.center.x -= event.deltaX/camera.scale; camera.center.y += event.deltaY/camera.scale; refresh() }
     override func scrollWheel(with event: NSEvent) {
         if event.modifierFlags.contains(.command) || !event.hasPreciseScrollingDeltas { zoom(exp(event.scrollingDeltaY*0.025),event:event) }
         else { camera.center.x -= event.scrollingDeltaX/camera.scale; camera.center.y += event.scrollingDeltaY/camera.scale; refresh() }
     }
     override func magnify(with event: NSEvent) { zoom(max(0.1,1+event.magnification),event:event) }
     func zoom(_ amount: Double, event: NSEvent) {
+        rememberView()
         let p = convert(event.locationInWindow,from:nil)
         let before = camera.world(p,size:bounds.size)
         camera.scale = min(max(camera.scale*amount,1e-8),1e8)
@@ -301,18 +280,22 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
         // Retessellate curves/grid at the new screen-space tolerance.
         refresh(force:true)
     }
-    override func keyDown(with event: NSEvent) {
+    override func keyDown(with event:NSEvent) {
+        if model.handleCADKey(event) {return}
         switch event.keyCode {
-        case 53: model.cancel()
-        case 51,117: model.execute("ERASE")
-        case 36,76: completePath()
-        case 99: model.snapping.toggle()
-        case 100: model.ortho.toggle()
-        default: if let text = event.characters, !event.modifierFlags.contains(.command), text.unicodeScalars.allSatisfy({$0.value>=32&&$0.value<127}) {model.commandText += text;model.focusCommand?()} else {super.keyDown(with:event)}
+        case 53:model.cancel()
+        case 51,117:model.choose(.erase)
+        case 36,76:model.submit()
+        case 49:
+            if model.spaceSubmits {model.submit()}else{model.commandText += " ";model.focusCommand?()}
+        default:
+            if let text = event.characters,event.modifierFlags.intersection([.command,.control]).isEmpty,!text.isEmpty,text.unicodeScalars.allSatisfy({$0.value>=32}) {model.commandText += text;model.focusCommand?()}
+            else{super.keyDown(with:event)}
         }
     }
     fileprivate func drawOverlay() {
         let size = bounds.size
+        updateDynamicInput()
         if let start = selectionStart, let end = selectionEnd {
             let a = camera.screen(start,size:size), b = camera.screen(end,size:size)
             let rect = NSRect(x:min(a.x,b.x),y:min(a.y,b.y),width:abs(a.x-b.x),height:abs(a.y-b.y))
@@ -335,6 +318,7 @@ final class MetalDrawing: NSObject, MTKViewDelegate {
         let a = camera.screen(points[0],size:size); let b = camera.screen(cursor,size:size)
         switch model.tool {
         case .rectangle, .hatch: path.appendRect(NSRect(x:min(a.x,b.x),y:min(a.y,b.y),width:abs(b.x-a.x),height:abs(b.y-a.y)))
+        case .select where model.session.name == "ZOOM":path.appendRect(NSRect(x:min(a.x,b.x),y:min(a.y,b.y),width:abs(b.x-a.x),height:abs(b.y-a.y)))
         case .circle, .arc: let r = hypot(b.x-a.x,b.y-a.y); path.appendOval(in:NSRect(x:a.x-r,y:a.y-r,width:r*2,height:r*2))
         default: path.move(to:a); for p in points.dropFirst() { path.line(to:camera.screen(p,size:size)) }; path.line(to:b)
         }

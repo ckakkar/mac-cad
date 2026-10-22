@@ -20,37 +20,39 @@ struct WorkspaceView: View {
                 Menu("Selection") {
                     Button("Select All"){model.operation(["op":"select_all"])}
                     Button("Clear Selection"){model.operation(["op":"select","ids":[]])}
-                    Button("Select Similar"){model.execute("SELECTSIMILAR")}
+                    Button("Select Similar"){model.runFromMenu("SELECTSIMILAR")}
                     Button("Measure Selection"){model.measureSelection()}
                 }.fixedSize()
                 Spacer()
                 icon("Zoom extents","arrow.up.left.and.arrow.down.right"){model.fitView?()}
-                icon("Command history","terminal"){model.showCommandHistory.toggle()}
+                icon("Command window","terminal"){model.showCommandLine.toggle()}
                 icon("Properties","sidebar.right"){model.showProperties.toggle()}
                 icon("Command reference","questionmark.circle"){model.showCommandReference = true}
             }.buttonStyle(.borderless).padding(.horizontal,16).padding(.vertical,10)
             Divider()
             HSplitView {
-                toolSets.frame(minWidth:162,idealWidth:178,maxWidth:220)
+                if model.showTools {toolSets.frame(minWidth:162,idealWidth:178,maxWidth:220)}
                 VStack(spacing:0) {
                     HStack{Image(systemName:"doc.text").foregroundStyle(.secondary);Text(model.drawingTitle).font(.system(size:11,weight:.medium)).lineLimit(1);Spacer();Text("MODEL SPACE").font(.system(size:9,weight:.medium)).tracking(1).foregroundStyle(.secondary)}.padding(.horizontal,12).padding(.vertical,7).background(.bar)
                     ZStack(alignment:.topLeading) {
                         CanvasHost(model:model)
                         Text("[Top]  [2D Wireframe]").font(.system(size:11)).foregroundStyle(.white.opacity(0.65)).padding(12).allowsHitTesting(false)
                     }.frame(minWidth:450,minHeight:350)
-                    commandArea
+                    if model.showCommandLine {commandArea}
                 }
-                if model.showProperties {InspectorView(model:model).frame(minWidth:245,idealWidth:280,maxWidth:360)}
+                if model.showProperties || model.showLayers {InspectorView(model:model).frame(minWidth:245,idealWidth:280,maxWidth:360)}
             }
             Divider()
-            HStack(spacing:12) {
+            if model.showStatus {HStack(spacing:12) {
                 Text("Model").font(.system(size:10,weight:.semibold)).padding(.horizontal,12).padding(.vertical,4).background(Color.accentColor.opacity(0.12),in:RoundedRectangle(cornerRadius:3))
                 Text(model.message).lineLimit(1).truncationMode(.middle);Spacer(minLength:4)
                 Text(String(format:"%.2f, %.2f",model.coordinate.x,model.coordinate.y)).monospacedDigit().frame(minWidth:120,alignment:.trailing);Text(model.units).foregroundStyle(.tertiary)
-                toggle("Grid",$model.grid);toggle("Snap",$model.snapping);toggle("Ortho",$model.ortho);toggle("Polar",$model.polar);toggle("LWT",$model.lineWeights)
-            }.font(.system(size:10)).foregroundStyle(.secondary).padding(.horizontal,10).padding(.vertical,5)
+                toggle("Grid",$model.grid);toggle("Snap",$model.snapping);toggle("Ortho",$model.ortho);toggle("Polar",$model.polar);toggle("LWT",$model.lineWeights);toggle("DYN",$model.dynamicInput);toggle("GSNAP",$model.gridSnap)
+            }.font(.system(size:10)).foregroundStyle(.secondary).padding(.horizontal,10).padding(.vertical,5)}
         }.background(Color(nsColor:.windowBackgroundColor))
-        .onChange(of:model.grid){model.invalidate?()}.onChange(of:model.lineWeights){model.invalidate?()}
+        .onChange(of:model.grid){model.invalidate?()}.onChange(of:model.lineWeights){model.invalidate?()}.onChange(of:model.dynamicInput){model.invalidate?()}
+        .onChange(of:model.ortho){if model.ortho{model.polar = false};model.invalidate?()}
+        .onChange(of:model.polar){if model.polar{model.ortho = false};model.invalidate?()}
         .task{await model.refresh()}
         .alert("Drawing command",isPresented:Binding(get:{model.errorMessage != nil},set:{if !$0{model.errorMessage = nil}})){Button("OK"){model.errorMessage = nil}}message:{Text(model.errorMessage ?? "")}
         .sheet(isPresented:$model.showCommandReference){CommandReference(model:model)}
@@ -61,17 +63,17 @@ struct WorkspaceView: View {
             toolGroup("Draw",[.line,.polyline,.rectangle,.polygon,.circle,.arc,.ellipse,.spline,.point])
             toolGroup("Modify",[.move,.copy,.rotate,.scale,.mirror,.offset,.trim,.extend,.fillet,.chamfer])
             LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:4){
-                action("Join","point.3.connected.trianglepath.dotted"){model.execute("JOIN")}
-                action("Break","scissors"){model.promptCommand("BREAK","Point on the selected line (x,y)","0,0")}
-                action("Array","square.grid.3x3"){model.promptCommand("ARRAYRECT","Rows columns X-spacing Y-spacing","2 3 1000 1000")}
-                action("Polar Array","circle.grid.3x3"){model.promptCommand("ARRAYPOLAR","Center-x,y count total-angle","0,0 6 360")}
-                action("Explode","square.stack.3d.up.slash"){model.execute("EXPLODE")}
-                action("Erase","trash"){model.execute("ERASE")}
+                action("Join","point.3.connected.trianglepath.dotted"){model.choose(.join)}
+                action("Break","scissors"){model.choose(.breakLine)}
+                action("Array","square.grid.3x3"){model.choose(.arrayRect)}
+                action("Polar Array","circle.grid.3x3"){model.choose(.arrayPolar)}
+                action("Explode","square.stack.3d.up.slash"){model.choose(.explode)}
+                action("Erase","trash"){model.choose(.erase)}
             }
-            toolGroup("Annotate",[.text,.dimension,.radius,.leader,.hatch,.measure])
+            toolGroup("Annotate",[.text,.dimension,.alignedDimension,.radius,.diameter,.leader,.hatch,.measure])
             VStack(alignment:.leading,spacing:7){Text("BLOCKS").font(.system(size:10,weight:.semibold)).foregroundStyle(.secondary)
-                Button("Create from selection…"){model.promptCommand("BLOCK","Name and base point","Block1 0,0")}
-                Menu("Insert Block"){ForEach(model.blocks,id:\.self){name in Button(name){model.promptCommand("INSERT","Name, insertion point, scale and angle","\(name) 0,0 1 0")}}}.disabled(model.blocks.isEmpty)
+                Button("Create from selection…"){model.choose(.block)}
+                Menu("Insert Block"){ForEach(model.blocks,id:\.self){name in Button(name){model.execute("INSERT");model.execute(name)}}}.disabled(model.blocks.isEmpty)
             }.font(.system(size:11))
             if model.entityCount == 0 {Button("Open example plan"){model.demo()}.font(.caption).buttonStyle(.link)}
         }.padding(12)}
@@ -90,7 +92,7 @@ struct WorkspaceView: View {
                 ScrollViewReader{proxy in ScrollView{VStack(alignment:.leading,spacing:3){ForEach(Array(model.commandHistory.enumerated()),id:\.offset){i,text in Text(text).font(.system(size:10,design:.monospaced)).foregroundStyle(.secondary).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading).id(i)}}.padding(.horizontal,12).padding(.vertical,6)}.frame(height:68).onChange(of:model.commandHistory.count){proxy.scrollTo(model.commandHistory.count-1,anchor:.bottom)}}
             }
             HStack(spacing:8){Text("Command:").font(.system(size:11,weight:.medium));CommandInput(model:model).frame(height:24);Text(model.tool.title).font(.caption).foregroundStyle(.secondary)}.padding(.horizontal,12).padding(.vertical,5)
-            Text(model.tool == .select ? "Window: left → right  ·  Crossing: right → left  ·  Shift to add":model.message).font(.system(size:9)).foregroundStyle(.tertiary).padding(.horizontal,12).padding(.bottom,5)
+            Text(model.tool == .select ? "Return/Space accepts  ·  Escape cancels  ·  Shift removes from selection":model.message).font(.system(size:9)).foregroundStyle(.tertiary).padding(.horizontal,12).padding(.bottom,5)
         }.background(.bar)
     }
     private func toggle(_ title:String,_ value:Binding<Bool>)->some View{Button{value.wrappedValue.toggle()}label:{Text(title.uppercased()).font(.system(size:9,weight:.medium)).foregroundStyle(value.wrappedValue ? Color.accentColor:.secondary)}.buttonStyle(.plain)}
@@ -99,7 +101,7 @@ struct WorkspaceView: View {
 
 struct CommandReference:View {
     @ObservedObject var model:EditorModel
-    var body:some View{VStack(alignment:.leading,spacing:14){Text("2D command reference").font(.title2.weight(.semibold));Text("Coordinates use drawing units. Select objects before modifying. Angles are degrees. Up/Down recalls history; Tab completes commands.").foregroundStyle(.secondary)
+    var body:some View{VStack(alignment:.leading,spacing:14){Text("2D command reference").font(.title2.weight(.semibold));Text("Space/Return accepts prompts and repeats the last command when idle. Select before a modify tool or after invoking it. x,y is absolute; @x,y and @distance<angle are relative. Angles are degrees. Annotation spaces remain text.").foregroundStyle(.secondary)
         ScrollView{Text("""
         LINE 0,0 3000,0          RECT 0,0 8000,6000
         PLINE 0,0 1000,0:0.414214 1000,1000 close
@@ -136,23 +138,4 @@ struct CommandReference:View {
         """).font(.system(size:11,design:.monospaced)).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)}
         Button("Done"){model.showCommandReference = false}.keyboardShortcut(.defaultAction).frame(maxWidth:.infinity,alignment:.trailing)
     }.padding(24).frame(width:670,height:700)}
-}
-
-struct CommandInput:NSViewRepresentable {
-    @ObservedObject var model:EditorModel
-    func makeCoordinator()->Coordinator{Coordinator(model)}
-    func makeNSView(context:Context)->NSTextField{let field = NSTextField();field.isBordered = false;field.drawsBackground = false;field.font = .monospacedSystemFont(ofSize:12,weight:.regular);field.placeholderString = "Type a command or coordinates";field.delegate = context.coordinator;field.setAccessibilityLabel("CAD command input");model.focusCommand = {[weak field] in field?.window?.makeFirstResponder(field)};return field}
-    func updateNSView(_ field:NSTextField,context:Context){if field.stringValue != model.commandText{field.stringValue = model.commandText}}
-    final class Coordinator:NSObject,NSTextFieldDelegate {
-        let model:EditorModel;var index:Int?
-        init(_ model:EditorModel){self.model = model}
-        func controlTextDidChange(_ obj:Notification){guard let field = obj.object as? NSTextField else{return};model.commandText = field.stringValue;index = nil}
-        func control(_ control:NSControl,textView:NSTextView,doCommandBy selector:Selector)->Bool{
-            if selector == #selector(NSResponder.insertNewline(_:)){model.submit();textView.string = "";index = nil;return true}
-            if selector == #selector(NSResponder.cancelOperation(_:)){model.cancel();model.commandText = "";textView.string = "";return true}
-            if selector == #selector(NSResponder.moveUp(_:)) || selector == #selector(NSResponder.moveDown(_:)){let history = model.commandHistory;guard !history.isEmpty else{return true};let delta = selector == #selector(NSResponder.moveUp(_:)) ? -1:1;index = min(max((index ?? history.count)+delta,0),history.count);let value = index!<history.count ? history[index!]:"";model.commandText = value;textView.string = value;textView.setSelectedRange(NSRange(location:(value as NSString).length,length:0));return true}
-            if selector == #selector(NSResponder.insertTab(_:)){let prefix = model.commandText.uppercased();if let name = Tool.allCases.map({$0.rawValue.uppercased()}).first(where:{$0.hasPrefix(prefix)}){model.commandText = name;textView.string = name;textView.setSelectedRange(NSRange(location:name.count,length:0))};return true}
-            return false
-        }
-    }
 }
